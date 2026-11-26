@@ -1,0 +1,12 @@
+{
+  "name": "colab-mcp-panel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node pack.mjs",
+    "test": "node --test test/panel.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

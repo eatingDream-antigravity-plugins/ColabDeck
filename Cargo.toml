@@ -1,0 +1,24 @@
+[package]
+name = "colab-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Antigravity MCP plugin panel for Google Colab CLI: ADC and multi-account support, GPU sessions with VRAM targeting, dual-layer cost guards, SSH port forwarding, and declarative VM plugins."
+license = "MIT"
+repository = "https://github.com/eatingDream-antigravity-plugins/colab-mcp"
+keywords = ["colab", "google-colab", "gpu", "mcp", "antigravity"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "colab-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = true

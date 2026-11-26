@@ -1,0 +1,34 @@
+# ColabDeck (`colab-mcp`)
+
+> Rust server for the Model Context Protocol (MCP) and an interactive Google Colab panel. It uses the local Colab CLI for runtime lifecycle and billing telemetry.
+
+- [Agent guide](docs/ai-guide.md)
+- [Agent skill](skills/colab-panel/SKILL.md)
+- [Quick start](README.md)
+- [Upstream notices](THIRD_PARTY_NOTICES.md)
+
+## Public tools
+
+- `colab_panel { refresh?: bool }` returns cached state and the panel resource. Use `refresh: true` to schedule a background refresh.
+- `colab_status { force?: bool }` returns billing and runtime state. Use `force: true` to wait for a fresh sample.
+- `colab_session_action` supports `provision`, `cancel_provision`, `stop`, `reap_orphan`, `restart_kernel` and `url`. Pass `session` (or `name`) for named actions, `endpoint` for orphan reap, and `job_id` for provision cancellation. Pass `account_id?` and `endpoint?` as strings or null to check the target. Provision accepts `name?`, `accelerator?`, `high_mem?`, `min_vram_mib?`, `max_attempts?`, `max_runtime_secs?`, `idle_timeout_secs?`, `max_spend_cu?` and `min_balance_cu?`.
+- `colab_tunnel_action` supports `open` (`session`, `local_port?` 1024–65535, default 8000, `remote_port?` 1–65535 excluding 8080, default local port, `health_path?` string or null), `close` (`tunnel_id`), `dismiss` (`tunnel_id`) and `list`. `dismiss` removes a stopped or failed tunnel entry and returns `dismissed`.
+- `colab_deploy_action` supports `deploy` (`plugin_id?`, `session?` string or null, `accelerator?`, `inputs?` object, `stop_on_failure?` boolean or null), `cancel` (`run_id`), `search_hf` (`query`) and `inspect_hf` (`repo`, `accelerator?`).
+
+Pass `expected_backend_mode` (`real` or `mock`) and `account_id` from the current snapshot on session, deploy and watchdog lifecycle actions. Omit `min_vram_mib` to inherit the default. Pass `min_vram_mib: null` to clear it for one allocation. Omit a guard setting to inherit it. Use `null` or `0` for `max_runtime_secs`, `idle_timeout_secs` and `max_spend_cu` to clear that limit. Use `null` to clear `min_balance_cu`. Verify endpoint release after a stop. `PendingStop` means the guard will retry verification.
+
+## App-only tools
+
+- `colab_app_poll { since_rev?: integer | null, force?: bool }` returns the full app snapshot or an unchanged revision.
+- `colab_app_watchdog { session, action, hours?: number, endpoint?: string | null, account_id?: string | null }` supports `arm`, `extend` and `cancel`. Hours range from 0.25 to 24.
+- `colab_app_accounts` supports `list`, `preview_switch`, `switch` (`account_id`, `confirm: true`), `add` (`account_id`, `label?`, `email?` string or null, `auth_mode?`), `remove` (`account_id`) and `set_hf_token` (`token`).
+- `colab_app_plugins` supports `list`, `search_hf` (`query`), `inspect_hf` (`repo`, `accelerator?`), `install_dir` (`path`), `install_git` (`url`), `remove` (`plugin_id`), `deploy` (`plugin_id?`, `session?` string or null, `accelerator?`, `inputs?` object, `stop_on_failure?` boolean or null) and `cancel_run` (`run_id`).
+- `colab_app_settings` supports `get`, `doctor` and `update` (`patch` object). See the agent guide for patch fields.
+
+MCP Apps clients advertise `text/html;profile=mcp-app` in the UI extension's `mimeTypes` array. The fixed panel resource contains static HTML. Read current state using tools. Public snapshots omit account emails. Use `colab-mcp serve --mock` for zero-billing tests.
+
+`preview_switch` returns counts `open_tunnels` and `active_sessions`. It also returns `closing_tunnels` (`id`, `local_url`, `session`, `remote_port`), `watched_sessions` (`name`, `hardware`, `endpoint`, `remaining_secs`, null for an idle-only watchdog), `unwatched_sessions` (`name`, `hardware`, `endpoint`), and `orphan_sessions` (`endpoint`, `hardware`, `external_name`). Only an enforced VM watchdog qualifies a managed runtime for `watched_sessions`.
+
+For both deploy tools, omit `session` or use `null` to create a runtime. Use a session name to target an existing runtime. `stop_on_failure` defaults to `false` when omitted or `null`. When `true`, the server stops a runtime created by this deploy if it fails before `ready` and no other active deploy uses the runtime. `PendingStop` signals that release still needs verification.
+
+Snapshots include session uptime and spend, `start_source` (`tracked`, `cli_history` or `first_seen`), and `external_name`. They also include `hardware_rates` for all eight accelerators and `ended_sessions` for the ten most recent ended runtimes on the active account.

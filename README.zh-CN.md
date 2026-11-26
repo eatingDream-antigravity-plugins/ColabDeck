@@ -6,9 +6,9 @@
 
 **在 Antigravity 中管理 Google Colab GPU，查看算力用量，并在主机和虚拟机上设置成本守卫。**
 
-[English](README.md) | 简体中文 · [Releases](https://github.com/eatingDream-antigravity-plugins/colab-mcp/releases) · [AI 指南](docs/ai-guide.md) · [`llms.txt`](llms.txt)
+[English](README.md) | 简体中文 · [Releases](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases) · [AI 指南](docs/ai-guide.md) · [`llms.txt`](llms.txt)
 
-[![CI](https://github.com/eatingDream-antigravity-plugins/colab-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/eatingDream-antigravity-plugins/colab-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml/badge.svg)](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml)
 ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-1A1916?logo=rust&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -34,8 +34,8 @@
 需要 Rust 1.89+（源码构建）、Node.js 20+，以及位于 `PATH`（或 `COLAB_MCP_COLAB_BIN`）中的 Google Colab CLI（`colab`）。
 
 ```sh
-git clone https://github.com/eatingDream-antigravity-plugins/colab-mcp.git
-cd colab-mcp
+git clone https://github.com/eatingDream-antigravity-plugins/ColabDeck.git
+cd ColabDeck
 chmod +x scripts/install.sh scripts/check_sanitized.sh
 ./scripts/install.sh
 ```
@@ -51,7 +51,7 @@ colab-mcp serve --mock
 全部 CLI 参数、环境变量、MCP 工具 Schema、SEP-1865 协商规则与成本安全流程均整理在 Agent 文档中：
 
 ```sh
-npx skills add eatingDream-antigravity-plugins/colab-mcp
+npx skills add eatingDream-antigravity-plugins/ColabDeck
 ```
 
 > 直接告诉你的 Agent：*「阅读 [`llms.txt`](llms.txt) 和 [`docs/ai-guide.md`](docs/ai-guide.md)，配置 `colab-mcp` 并在成本守卫保护下管理 Colab GPU 会话。」*

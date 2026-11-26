@@ -7,8 +7,8 @@
     "name": "eatingDream",
     "url": "https://github.com/eatingDream"
   },
-  "homepage": "https://github.com/eatingDream-antigravity-plugins/colab-mcp",
-  "repository": "https://github.com/eatingDream-antigravity-plugins/colab-mcp",
+  "homepage": "https://github.com/eatingDream-antigravity-plugins/ColabDeck",
+  "repository": "https://github.com/eatingDream-antigravity-plugins/ColabDeck",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "Open ColabDeck to check compute unit balance, burn rate, and active GPU runtimes",

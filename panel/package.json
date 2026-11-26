@@ -7,6 +7,6 @@
     "test": "node --test test/panel.test.mjs"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.28.2"
   }
 }

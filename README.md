@@ -6,9 +6,9 @@
 
 **Manage Google Colab GPUs from Antigravity with usage monitoring and host and VM cost guards.**
 
-English | [简体中文](README.zh-CN.md) · [Releases](https://github.com/eatingDream-antigravity-plugins/colab-mcp/releases) · [AI Guide](docs/ai-guide.md) · [`llms.txt`](llms.txt)
+English | [简体中文](README.zh-CN.md) · [Releases](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases) · [AI Guide](docs/ai-guide.md) · [`llms.txt`](llms.txt)
 
-[![CI](https://github.com/eatingDream-antigravity-plugins/colab-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/eatingDream-antigravity-plugins/colab-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml/badge.svg)](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml)
 ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-1A1916?logo=rust&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -34,8 +34,8 @@ The local `colab` CLI handles authentication and runtime management. ColabDeck a
 Requires Rust 1.89+ (to build from source), Node.js 20+, and the Google Colab CLI (`colab`) on your `PATH` (or via `COLAB_MCP_COLAB_BIN`).
 
 ```sh
-git clone https://github.com/eatingDream-antigravity-plugins/colab-mcp.git
-cd colab-mcp
+git clone https://github.com/eatingDream-antigravity-plugins/ColabDeck.git
+cd ColabDeck
 chmod +x scripts/install.sh scripts/check_sanitized.sh
 ./scripts/install.sh
 ```
@@ -51,7 +51,7 @@ colab-mcp serve --mock
 All CLI flags, environment variables, MCP tool schemas, SEP-1865 negotiation rules, and cost-safety workflows live in the agent docs:
 
 ```sh
-npx skills add eatingDream-antigravity-plugins/colab-mcp
+npx skills add eatingDream-antigravity-plugins/ColabDeck
 ```
 
 > Tell your agent: *"Read [`llms.txt`](llms.txt) and [`docs/ai-guide.md`](docs/ai-guide.md) to configure `colab-mcp` and manage Colab GPU sessions safely with cost guards."*

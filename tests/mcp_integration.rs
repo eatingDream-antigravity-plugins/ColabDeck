@@ -776,8 +776,14 @@ fn deployment_reserves_quota_and_cancel_releases_its_original_account_and_tunnel
         })
         .unwrap();
     coord.switch_account("other").unwrap();
-    thread::sleep(Duration::from_millis(800));
+    thread::sleep(Duration::from_millis(900));
     coord.switch_account(ADC_ACCOUNT_ID).unwrap();
+    for _ in 0..200 {
+        if coord.snapshot_json(None)["plugin_runs"][0]["state"] == "ready" {
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
     let snap = coord.snapshot_json(None);
     assert_eq!(snap["plugin_runs"][0]["state"], "ready");
     let tunnel = &snap["tunnels"][0];

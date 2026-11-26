@@ -1,0 +1,123 @@
+api = 1
+id = "llama-cpp"
+version = "0.1.0"
+needs = ["hf_token"]
+
+[name]
+en = "Deploy a GGUF model"
+zh-CN = "一键部署 GGUF 模型"
+
+[description]
+en = "Serve a Hugging Face GGUF model with llama.cpp on a Colab GPU (OpenAI-compatible API + Web Chat) with automatic VRAM quantisation selection."
+zh-CN = "在 Colab GPU 上通过 llama.cpp 部署 Hugging Face GGUF 模型（提供 OpenAI 兼容 API 与网页聊天），自动匹配显存放得下的最佳量化。"
+
+[provision]
+accelerator = "G4"
+min_vram_mib = 0
+high_mem = false
+
+[[inputs]]
+id = "repo"
+type = "hf-model"
+required = true
+[inputs.label]
+en = "Model repository"
+zh-CN = "模型仓库"
+[inputs.help]
+en = "Hugging Face repo with GGUF files, e.g. unsloth/Qwen3-32B-GGUF"
+zh-CN = "包含 GGUF 文件的 Hugging Face 仓库，例如 unsloth/Qwen3-32B-GGUF"
+
+[[inputs]]
+id = "quant"
+type = "select"
+options = ["auto", "Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "IQ4_XS", "Q3_K_M"]
+default = "auto"
+[inputs.label]
+en = "Quantisation"
+zh-CN = "量化精度"
+
+[[inputs]]
+id = "ctx"
+type = "number"
+default = 0
+min = 0
+max = 1048576
+[inputs.label]
+en = "Context length (0 = auto)"
+zh-CN = "上下文长度（0 = 自动）"
+
+[[inputs]]
+id = "port"
+type = "number"
+default = 8000
+min = 1024
+max = 65535
+[inputs.label]
+en = "VM server port"
+zh-CN = "VM 服务端口"
+
+[[inputs]]
+id = "alias"
+type = "text"
+[inputs.label]
+en = "API model alias"
+zh-CN = "API 模型别名"
+
+[[inputs]]
+id = "kv"
+type = "select"
+options = ["auto", "f16", "q8_0", "q4_0"]
+default = "auto"
+[inputs.label]
+en = "KV cache type"
+zh-CN = "KV 缓存类型"
+
+[[inputs]]
+id = "api_key"
+type = "secret"
+[inputs.label]
+en = "API key (optional)"
+zh-CN = "API 密钥（可选）"
+
+[run]
+script = "worker.py"
+
+[[stages]]
+id = "detect"
+[stages.label]
+en = "Check GPU"
+zh-CN = "检测 GPU"
+
+[[stages]]
+id = "plan"
+[stages.label]
+en = "Select quantisation"
+zh-CN = "选择量化方案"
+
+[[stages]]
+id = "download"
+[stages.label]
+en = "Download binary & model"
+zh-CN = "下载引擎与模型"
+
+[[stages]]
+id = "server"
+[stages.label]
+en = "Start llama-server"
+zh-CN = "启动推理服务"
+
+[[stages]]
+id = "warmup"
+[stages.label]
+en = "Warm up CUDA"
+zh-CN = "预热 CUDA"
+
+[[endpoints]]
+id = "api"
+port_input = "port"
+path = "/v1"
+health = "/health"
+kind = "openai"
+[endpoints.label]
+en = "OpenAI API & Web Chat"
+zh-CN = "OpenAI 接口与网页聊天"

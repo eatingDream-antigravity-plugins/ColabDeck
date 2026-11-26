@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-and-panel:
+    name: Rust + Panel (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "20"
+      - name: Build and test panel
+        run: |
+          (cd panel && npm ci --no-audit --no-fund)
+          node panel/pack.mjs
+          node --test panel/test/panel.test.mjs
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Rustfmt check
+        run: cargo fmt --check
+      - name: Clippy check
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Cargo test
+        run: cargo test --locked
+      - name: Test VM worker safety
+        run: python3 -m unittest discover -s tests -p 'test_vm_workers.py'
+
+  secrets-scan:
+    name: Secret scan (gitleaks) + sanitization guard
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (pinned binary, checksum verified)
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tgz="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$tgz" "$base/$tgz"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$tgz" | sha256sum -c -
+          tar xzf "$tgz" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+      - name: gitleaks (full history)
+        run: gitleaks detect --source . --redact --no-banner --verbose
+      - name: Sanitization guard
+        run: bash scripts/check_sanitized.sh

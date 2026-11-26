@@ -1,0 +1,195 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing Git tag for the release (e.g. v0.2.0)"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "Existing Git tag for the release"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  ensure-release:
+    name: Verify release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.tag.outputs.sha }}
+      tag_oid: ${{ steps.tag.outputs.tag_oid }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Validate tag format
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "Invalid release tag. Expected vX.Y.Z with optional SemVer suffixes." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve exact tag commit
+        id: tag
+        run: |
+          ref="refs/tags/${TAG}"
+          git show-ref --verify --quiet "$ref"
+          sha=$(git rev-parse --verify "$ref^{commit}")
+          tag_oid=$(git rev-parse --verify "$ref")
+          printf 'sha=%s\ntag_oid=%s\n' "$sha" "$tag_oid" >> "$GITHUB_OUTPUT"
+          git -c advice.detachedHead=false checkout --detach "$sha"
+      - name: Sanitization guard
+        run: bash scripts/check_sanitized.sh
+
+  build:
+    name: Build and package ${{ matrix.target }}
+    needs: ensure-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.ensure-release.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "20"
+      - name: Install Rust target
+        run: rustup target add "${{ matrix.target }}"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build and test panel HTML
+        run: |
+          (cd panel && npm ci --no-audit --no-fund)
+          node panel/pack.mjs
+          node --test panel/test/panel.test.mjs
+      - name: Run Rust tests
+        run: cargo test --locked
+      - name: Build, verify, and package tarball
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          CARGO_HOME_DIR="${CARGO_HOME:-${HOME}/.cargo}"
+          set -- "--remap-path-prefix=${HOME}=/build" \
+            "--remap-path-prefix=${CARGO_HOME_DIR}=/cargo" \
+            "--remap-path-prefix=${CARGO_HOME_DIR}/registry/src=/cargo-src" \
+            "--remap-path-prefix=${PWD}=/src" \
+            "--remap-path-prefix=$(pwd -P)=/src"
+          if [ -d "$CARGO_HOME_DIR" ]; then
+            CARGO_HOME_PHYSICAL="$(CDPATH= cd -- "$CARGO_HOME_DIR" && pwd -P)"
+            set -- "$@" "--remap-path-prefix=${CARGO_HOME_PHYSICAL}=/cargo" \
+              "--remap-path-prefix=${CARGO_HOME_PHYSICAL}/registry/src=/cargo-src"
+          fi
+          for registry_src in "${CARGO_HOME_DIR}"/registry/src/* "${CARGO_HOME_PHYSICAL:-$CARGO_HOME_DIR}"/registry/src/*; do
+            [ -d "$registry_src" ] || continue
+            set -- "$@" "--remap-path-prefix=${registry_src}=/cargo-src" \
+              "--remap-path-prefix=$(CDPATH= cd -- "$registry_src" && pwd -P)=/cargo-src"
+          done
+          RUSTFLAGS="$*"
+          # Preserve each remap as one compiler argument when a path contains spaces.
+          CARGO_ENCODED_RUSTFLAGS="$(printf '%s\037' "$@")"
+          CARGO_ENCODED_RUSTFLAGS="${CARGO_ENCODED_RUSTFLAGS%?}"
+          export RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
+          cargo build --release --locked --target "${TARGET}"
+          bin="target/${TARGET}/release/colab-mcp"
+          ARCHIVE="colab-mcp-${TAG}-${TARGET}.tar.gz"
+          STAGE="$(mktemp -d)"
+          trap 'rm -rf "$STAGE"' EXIT
+          mkdir -p "$STAGE/bin" "$STAGE/panel/dist" "$STAGE/rules" "$STAGE/skills/colab-panel" "$STAGE/assets" "$STAGE/docs"
+          install -m 0755 "$bin" "$STAGE/bin/colab-mcp"
+          cp panel/dist/panel.html "$STAGE/panel/dist/panel.html"
+          cp plugin/plugin.json "$STAGE/plugin.json"
+          cp plugin/mcp_config.json "$STAGE/mcp_config.json"
+          cp plugin/rules/AGENTS.md "$STAGE/rules/AGENTS.md"
+          cp skills/colab-panel/SKILL.md "$STAGE/skills/colab-panel/SKILL.md"
+          cp assets/logo.svg "$STAGE/assets/logo.svg"
+          cp LICENSE "$STAGE/LICENSE"
+          cp THIRD_PARTY_NOTICES.md "$STAGE/THIRD_PARTY_NOTICES.md"
+          cp README.md "$STAGE/README.md"
+          cp README.zh-CN.md "$STAGE/README.zh-CN.md"
+          cp docs/ai-guide.md "$STAGE/docs/ai-guide.md"
+          cp llms.txt "$STAGE/llms.txt"
+          bash scripts/check_sanitized.sh --stage "$STAGE"
+          COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C "$STAGE" .
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+          else
+            sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: colab-mcp-${{ matrix.target }}
+          path: |
+            colab-mcp-${{ env.TAG }}-${{ matrix.target }}.tar.gz
+            colab-mcp-${{ env.TAG }}-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish verified release assets
+    needs: [ensure-release, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+      TAG_OID: ${{ needs.ensure-release.outputs.tag_oid }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: colab-mcp-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify tag, checksums, and upload
+        working-directory: release-assets
+        run: |
+          oid=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq '.object.sha')
+          if [[ "$oid" != "$TAG_OID" ]]; then
+            echo "Release tag moved after verification." >&2
+            exit 1
+          fi
+          files=()
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
+            archive="colab-mcp-$TAG-$target.tar.gz"
+            [[ $(sha256sum "$archive") == "$(cat "$archive.sha256")" ]]
+            files+=("$archive" "$archive.sha256")
+          done
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            extra=()
+            if [[ "${TAG%%+*}" == *-* ]]; then extra=(--prerelease); fi
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes "${extra[@]}" "${files[@]}"
+          fi

@@ -14,3 +14,14 @@
 
 ## Zero-Billing Test Guarantee
 - `Host::run` and real subprocess/network spawners enforce compile-time `#[cfg(test)]` refusals alongside integration-test executor guards so `cargo test` can never spawn real `colab`/`ssh`/`git`/`curl` or consume Compute Units.
+
+## Supported versions
+
+Security fixes go into the latest release and `main`.
+
+## Reporting a vulnerability
+
+Please **do not open a public issue**. Report vulnerabilities privately via GitHub Security Advisories:
+<https://github.com/eatingDream-antigravity-plugins/ColabDeck/security/advisories/new>.
+
+Include steps to reproduce and potential impact. If you discover a leaked secret or credential, report it privately so it can be rotated before details become public.

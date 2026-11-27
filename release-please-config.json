@@ -9,6 +9,10 @@
       "type": "json",
       "path": "plugin/plugin.json",
       "jsonpath": "$.version"
+    },
+    {
+      "type": "generic",
+      "path": "assets/release-badge.svg"
     }
   ],
   "changelog-sections": [

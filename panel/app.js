@@ -126,7 +126,7 @@ const ov = (() => {
     const orp = ss.filter((x) => x.is_orphan), wrn = ss.filter((x) => x.guard_decision?.decision === "warn"), ps = isPs(s), arm = ss.filter((x) => x.watchdog?.armed).length;
     T(cs[0][1], t("bl")); T(bN, u ? fmtCu(u.projected_balance_cu) : "—"); H(bU, !u); T(bS, t("sl")); H(bS, !u?.stale); T(cs[0][3], u ? (actA()?.label || "") : t("uk"));
     T(cs[1][1], t("br")); T(rN, u ? fmtCu(u.rate_cu_per_hour) : "—"); H(rU, !u); T(cs[1][3], u ? (u.eta_secs != null ? `${t("et")} ${fmtDur(u.eta_secs)}` : t("bz")) : t("uk"));
-    T(cs[2][1], t("rt")); K(rtD, ss.length ? (orp.length ? "wn" : "ok") : "t3"); T(rtN, ss.length); T(cs[2][3], orp.length ? `${orp.length} [?]` : `${arm} WD`);
+    T(cs[2][1], t("rt")); K(rtD, ss.length ? (orp.length ? "wn" : "ok") : "t3"); T(rtN, ss.length); T(cs[2][3], orp.length ? `${orp.length} ${t("ex")}` : `${arm} WD`);
     T(cs[3][1], t("cg")); K(gD, ps ? "wn" : wrn.length || pss.length ? "er" : arm ? "ok" : "t3"); T(gT, ps ? t("gp") : wrn.length || pss.length ? t("gw") : arm ? t("ga") : t("gi")); T(cs[3][3], ss.length ? `${arm}/${ss.length} VM` : t("za"));
     const needSu = s.backend_mode !== "mock" && s.env && (!env.colab_found || !env.adc_file_present);
     H(suC, !needSu); if (needSu) { T(suT, t("sut")); T(suD, t("suh")); T(suB, t("t.settings")); }
@@ -147,8 +147,9 @@ const ov = (() => {
     H(oC, !orp.length);
     if (orp.length) {
       T(oT, t("ot")); T(oD, t("od"));
-      sync(oL, orp, (o) => o.endpoint, () => { const nm = SP("mn"), mt = SP("mt mn"), bt = BS("d", "rp"); return [IT(RW(RL(PL("wn", "[?]"), nm, mt), bt)), nm, mt, bt]; }, (r, o) => {
+      sync(oL, orp, (o) => o.endpoint, () => { const bg = PL("wn", ""), nm = SP("mn"), mt = SP("mt mn"), bt = BS("d", "rp"); return [IT(RW(RL(bg, nm, mt), bt)), nm, mt, bt, bg]; }, (r, o) => {
         const ep = o.endpoint, a = armedStop === `orphan:${ep}`;
+        T(r[4], o.external_name ? "CLI" : t("wb"));
         T(r[1], `${o.external_name ? `${o.external_name} · ` : ""}${o.hardware}`); T(r[2], `${upTxt(o)} · ${spTxt(o)}`);
         D(r[3], "ep", ep); TG(r[3], "a", a); T(r[3], t(a ? "cs" : "stopBill"));
       });
@@ -185,7 +186,7 @@ const sv = (() => {
         TG(r[0], "w", orp || ps || (!orp && !wd?.armed));
         T(r[1], sName(x)); PT(r[2], hw, ps || orp ? "wn" : "ok");
         if (ps) PT(r[3], t("ps"), "wn");
-        else if (orp) PT(r[3], x.external_name ? "[?] CLI" : t("bo"), "wn");
+        else if (orp) PT(r[3], t(x.external_name ? "ec" : "bo"), "wn");
         else { const rm = liveRem(wd); PT(r[3], wd?.armed ? (rm != null ? `${t("ar")} · ${fmtDur(rm)}` : t("ar")) : t("un"), wd?.armed ? "ok" : "wn"); }
         D(r[4], "a", orp ? "rp" : "st"); PE(r[4], dn, ep); TG(r[4], "a", a); T(r[4], t(a ? "cs" : "stopBill"));
         const shp = x.shape === "High-RAM" ? t("hm") : x.shape === "Standard" ? t("std") : x.shape;

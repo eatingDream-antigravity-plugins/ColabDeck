@@ -1,6 +1,6 @@
 [package]
 name = "colab-mcp"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Antigravity MCP plugin panel for Google Colab CLI: ADC and multi-account support, GPU sessions with VRAM targeting, dual-layer cost guards, SSH port forwarding, and declarative VM plugins."
 license = "MIT"

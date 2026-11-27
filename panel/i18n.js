@@ -106,7 +106,7 @@ sk|SSH Key:|SSH 密钥:
 pt|Path:|路径:
 za|0 active|0 运行中
 pv|Provisioning|分配中
-bo|[?] Browser|[?] 浏览器
+bo|Browser|浏览器
 ho|HTTP OK|HTTP 正常
 he|HTTP Err|HTTP 异常
 sf|Stop Failed — Billing!|停机失败 — 计费中！
@@ -125,7 +125,10 @@ swo|Unmanaged|未托管
 pe|Local 1024–65535; VM !=8080.|本地 1024–65535；VM 禁 8080。
 bn|Invalid number (≥0).|须为非负数。
 me|measured|实测
-es|est.|参考`;
+es|est.|参考
+ec|External CLI|外部 CLI
+wb|Web|浏览器
+ex|external|未托管`;
 const ST = "up:已连接,starting:启动中,failed:失败,stopped:已停止,running:运行中,ready:就绪,cancelling:取消中,cancelled:已取消,cancel_failed:取消失败,user_stop:手动停止,watchdog_idle:空闲停机,watchdog_deadline:定时停机,guard_spend_cap:花费上限,guard_runtime:时长上限,guard_balance:余额底线,vanished:已消失";
 
 export const STRINGS = { en: {}, "zh-CN": {} };

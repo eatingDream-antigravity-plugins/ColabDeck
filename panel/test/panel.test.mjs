@@ -23,6 +23,19 @@ test("i18n catalogs have identical keys in zh-CN and en", () => {
   assert.equal(tr("zh-CN", "stopBill"), "停止并结束计费");
   assert.equal(tr("en", "stopBill"), "Stop & End Billing");
   assert.equal(tr("en", "reconnected"), "✓ Reconnected");
+  assert.equal(tr("en", "bo"), "Browser");
+  assert.equal(tr("zh-CN", "bo"), "浏览器");
+  assert.equal(tr("en", "ec"), "External CLI");
+  assert.equal(tr("zh-CN", "ec"), "外部 CLI");
+  assert.equal(tr("en", "wb"), "Web");
+  assert.equal(tr("zh-CN", "wb"), "浏览器");
+  assert.equal(tr("en", "ex"), "external");
+  assert.equal(tr("zh-CN", "ex"), "未托管");
+  for (const l of ["en", "zh-CN"]) {
+    for (const [k, v] of Object.entries(STRINGS[l])) {
+      assert.ok(!v.includes("[?]"), `i18n key ${l}.${k} must not expose raw [?]`);
+    }
+  }
   assert.equal(fmtDur(5400), "1h 30m");
   assert.equal(fmtCu(8.9), "8.90");
 });
@@ -94,4 +107,8 @@ test("packed panel.html satisfies zero-innerHTML, design-token, and <=43,500 B b
   assert.ok(appSrc.includes("external_name"), "panel must render unmanaged external_name/uptime");
   assert.ok(!html.includes('class="cd"></span>'), "auto chip dot must not collide with .cd card class");
   assert.ok(html.includes("max-width:520px"), "narrow 2x2 KPI breakpoint must be 520px");
+  assert.ok(!appSrc.replace(/p\.session\s*===\s*"\[\?\]"/g, "").includes("[?]"), "panel UI must not render raw [?] badges");
+  assert.ok(appSrc.includes('${orp.length} ${t("ex")}'), "overview KPI must use i18n external count");
+  assert.ok(appSrc.includes('o.external_name ? "CLI" : t("wb")'), "overview unmanaged row must use dynamic CLI/Web badge");
+  assert.ok(appSrc.includes('t(x.external_name ? "ec" : "bo")'), "sessions card must use clean External CLI/Browser badge");
 });

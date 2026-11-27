@@ -6,9 +6,10 @@
 
 **Manage Google Colab GPUs from Antigravity with usage monitoring and host and VM cost guards.**
 
-English | [简体中文](README.zh-CN.md) · [Releases](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases) · [AI Guide](docs/ai-guide.md) · [`llms.txt`](llms.txt)
+[Homepage](https://colabdeck.eatingdream.dev) · English | [简体中文](README.zh-CN.md) · [Releases](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases) · [AI Guide](docs/ai-guide.md) · [`llms.txt`](llms.txt)
 
 [![CI](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml/badge.svg)](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml)
+[![Release](assets/release-badge.svg)](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases)
 ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-1A1916?logo=rust&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 

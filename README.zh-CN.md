@@ -6,9 +6,10 @@
 
 **在 Antigravity 中管理 Google Colab GPU，查看算力用量，并在主机和虚拟机上设置成本守卫。**
 
-[English](README.md) | 简体中文 · [Releases](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases) · [AI 指南](docs/ai-guide.md) · [`llms.txt`](llms.txt)
+[主页](https://colabdeck.eatingdream.dev) · [English](README.md) | 简体中文 · [Releases](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases) · [AI 指南](docs/ai-guide.md) · [`llms.txt`](llms.txt)
 
 [![CI](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml/badge.svg)](https://github.com/eatingDream-antigravity-plugins/ColabDeck/actions/workflows/ci.yml)
+[![Release](assets/release-badge.svg)](https://github.com/eatingDream-antigravity-plugins/ColabDeck/releases)
 ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-1A1916?logo=rust&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 

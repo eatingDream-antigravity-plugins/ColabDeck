@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.2.1...v0.2.2) (2026-11-27)
+
+
+### Bug Fixes
+
+* unify Colab Deck titles, kebab-case URLs, curl installer, and outcome-first docs ([#8](https://github.com/eatingDream-antigravity-plugins/colab-deck/issues/8)) ([5a32fe7](https://github.com/eatingDream-antigravity-plugins/colab-deck/commit/5a32fe7d2aabddf81c0ae0f66b78563f7b1d5f3d))
+
 ## [0.2.1](https://github.com/eatingDream-antigravity-plugins/ColabDeck/compare/v0.2.0...v0.2.1) (2026-11-27)
 
 

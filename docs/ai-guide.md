@@ -1,4 +1,4 @@
-# ColabDeck (`colab-mcp`) — AI Agent Guide & Technical Reference
+# Colab Deck (`colab-mcp`) — AI Agent Guide & Technical Reference
 
 This document contains the complete CLI, environment variable, MCP tool, protocol, and cost-safety reference for AI agents and automation.
 

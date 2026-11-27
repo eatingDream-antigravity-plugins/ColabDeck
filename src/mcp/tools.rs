@@ -163,7 +163,8 @@ pub fn list_resources_json() -> Value {
         "resources": [
             {
                 "uri": APP_URI,
-                "name": "Colab Panel",
+                "name": "Colab Deck",
+                "title": "Colab Deck",
                 "description": "Interactive Google Colab control panel: compute units, GPU sessions with VRAM retry, dual-layer cost guards, SSH port forwarding, and declarative VM plugins.",
                 "mimeType": APP_MIME,
                 "_meta": {
@@ -195,8 +196,8 @@ fn build_tool_registry() -> Value {
         "ui": { "resourceUri": APP_URI },
         "com.google.antigravity/ui": {
             "entrypoints": [
-                { "type": "aux_pane", "title": "Colab Panel" },
-                { "type": "global", "title": "Colab Panel" }
+                { "type": "aux_pane", "title": "Colab Deck" },
+                { "type": "global", "title": "Colab Deck" }
             ]
         }
     });
@@ -207,7 +208,7 @@ fn build_tool_registry() -> Value {
             // --- 5 Model-visible tools ---
             {
                 "name": "colab_panel",
-                "title": "Colab Panel",
+                "title": "Colab Deck",
                 "description": "Open or refresh the interactive Google Colab control panel (balance, GPU sessions, cost guards, SSH port forwarding, GGUF deploy).",
                 "inputSchema": {
                     "type": "object",

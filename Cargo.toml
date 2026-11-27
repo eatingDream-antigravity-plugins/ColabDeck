@@ -4,7 +4,7 @@ version = "0.2.1"
 edition = "2021"
 description = "Antigravity MCP plugin panel for Google Colab CLI: ADC and multi-account support, GPU sessions with VRAM targeting, dual-layer cost guards, SSH port forwarding, and declarative VM plugins."
 license = "MIT"
-repository = "https://github.com/eatingDream-antigravity-plugins/ColabDeck"
+repository = "https://github.com/eatingDream-antigravity-plugins/colab-deck"
 keywords = ["colab", "google-colab", "gpu", "mcp", "antigravity"]
 categories = ["command-line-utilities", "development-tools"]
 

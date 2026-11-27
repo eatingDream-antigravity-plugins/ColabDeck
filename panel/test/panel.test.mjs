@@ -86,7 +86,7 @@ test("packed panel.html satisfies zero-innerHTML, design-token, and <=43,500 B b
   assert.ok(appSrc.includes("created && ep"), "failed-deploy stop CTA must pin created + endpoint");
   assert.ok(appSrc.includes("s.env || {}"), "panel must handle env: null on cold start without throwing");
   assert.ok(bridgeSrc.includes("return null;"), "bridge parseC must fail closed on unknown colors");
-  assert.ok(html.includes("ColabDeck"), "panel must carry ColabDeck brand name");
+  assert.ok(html.includes("Colab Deck"), "panel must carry Colab Deck brand name");
   assert.ok(appSrc.includes("endpoint: ds.ep"), "panel must pin endpoint on session actions");
   assert.ok(appSrc.includes("cancel_failed"), "panel must keep cancel available on ready/cancel_failed runs");
   assert.ok(appSrc.includes("preview_switch"), "panel must preview account switch impact before switching");

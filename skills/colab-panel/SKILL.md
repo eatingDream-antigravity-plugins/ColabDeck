@@ -1,17 +1,17 @@
 ---
 name: colab-panel
 description: >-
-  ONLY use when operating the interactive ColabDeck MCP App UI panel or its
+  ONLY use when operating the interactive Colab Deck MCP App UI panel or its
   MCP-managed Google Colab actions (`colab_panel`, `colab_status`,
   `colab_session_action`, `colab_tunnel_action`, `colab_deploy_action`) to
   monitor compute unit balance and burn rate, provision GPU/TPU runtimes with
   VRAM targeting and dual-layer cost watchdogs, forward local ports over SSH,
   or deploy declarative VM plugins such as Hugging Face GGUF models via
   llama.cpp. Do NOT use for standalone headless CLI scripts outside the
-  ColabDeck MCP server.
+  Colab Deck MCP server.
 ---
 
-# ColabDeck (`colab-mcp`) Workflow
+# Colab Deck (`colab-mcp`) Workflow
 
 ## Start and check state
 

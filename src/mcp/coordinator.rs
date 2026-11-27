@@ -4158,7 +4158,7 @@ fn concise_summary(snapshot: &Value) -> String {
             .filter(|t| !matches!(t["state"]["state"].as_str(), Some("stopped" | "failed")))
             .count()
     });
-    format!("Colab Panel ({mode}, {account}): balance {balance}, burn {rate}, {sessions} active runtime(s), {tunnels} active tunnel(s).")
+    format!("Colab Deck ({mode}, {account}): balance {balance}, burn {rate}, {sessions} active runtime(s), {tunnels} active tunnel(s).")
 }
 
 fn format_prov_event(ev: &ProvisionEvent) -> String {

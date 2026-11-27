@@ -1,6 +1,6 @@
 {
   "name": "colab-mcp",
-  "displayName": "ColabDeck",
+  "displayName": "Colab Deck",
   "version": "0.2.1",
   "description": "Interactive Google Colab control panel for Antigravity: ADC and multi-account billing telemetry, GPU sessions with VRAM retry, dual-layer cost guards, SSH port forwarding, and declarative VM plugins.",
   "author": {
@@ -8,10 +8,10 @@
     "url": "https://github.com/eatingDream"
   },
   "homepage": "https://colabdeck.eatingdream.dev",
-  "repository": "https://github.com/eatingDream-antigravity-plugins/ColabDeck",
+  "repository": "https://github.com/eatingDream-antigravity-plugins/colab-deck",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
-    "Open ColabDeck to check compute unit balance, burn rate, and active GPU runtimes",
+    "Open Colab Deck to check compute unit balance, burn rate, and active GPU runtimes",
     "Provision a G4 GPU session with a 2-hour VM watchdog and forward port 8000",
     "Search Hugging Face GGUF models and deploy one on Colab with llama.cpp"
   ]

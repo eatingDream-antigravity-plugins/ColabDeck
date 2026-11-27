@@ -17,9 +17,9 @@ Colab Deck starts, watches, and stops Colab sessions, forwards ports, and deploy
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-181C28)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/colabdeck-sessions-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/colabdeck-sessions-light.png">
-  <img src="docs/images/colabdeck-sessions-dark.png" alt="Colab Deck sessions panel showing active GPU runtime and watchdog" width="620">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/colabdeck-overview-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/colabdeck-overview-light.png">
+  <img src="docs/images/colabdeck-overview-dark.png" alt="Colab Deck overview panel showing 7-day CU balance chart, burn rate, and Cost Guard auto-stop status" width="620">
 </picture>
 
 </div>

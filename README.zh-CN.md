@@ -17,9 +17,9 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-181C28)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/colabdeck-sessions-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/colabdeck-sessions-light.png">
-  <img src="docs/images/colabdeck-sessions-dark.png" alt="Colab Deck 会话管理面板预览" width="620">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/colabdeck-overview-dark-zh.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/colabdeck-overview-light-zh.png">
+  <img src="docs/images/colabdeck-overview-dark-zh.png" alt="Colab Deck 总览面板截图，展示 7 天 CU 余额走势图、消耗速率与自动停机保护状态" width="620">
 </picture>
 
 </div>

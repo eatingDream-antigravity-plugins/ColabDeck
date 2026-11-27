@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="t d" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','SF Pro Display',Helvetica,Arial,sans-serif">
+  <title id="t">Colab Deck — Social Preview</title>
+  <desc id="d">Manage Colab GPUs from your sidebar with 7-day Compute Unit telemetry, dual-layer auto-stop Cost Guard, exclusive 127.0.0.1 SSH port forwarding, and 1-click GGUF deploy.</desc>
+  <defs>
+    <radialGradient id="glow-indigo" cx="16%" cy="16%" r="55%">
+      <stop offset="0%" stop-color="#6895FF" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#0B0D12" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-emerald" cx="85%" cy="85%" r="48%">
+      <stop offset="0%" stop-color="#34D399" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#0B0D12" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="spark-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6895FF" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#6895FF" stop-opacity="0.02"/>
+    </linearGradient>
+    <pattern id="dot-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#F2F4F8" fill-opacity="0.04"/>
+    </pattern>
+  </defs>
+
+  <!-- Base Lucid Indigo Surface -->
+  <rect width="1280" height="640" fill="#0B0D12"/>
+  <rect width="1280" height="640" fill="url(#dot-grid)"/>
+  <rect width="1280" height="640" fill="url(#glow-indigo)"/>
+  <rect width="1280" height="640" fill="url(#glow-emerald)"/>
+  <rect x="16" y="16" width="1248" height="608" rx="22" fill="none" stroke="#23293A" stroke-width="1.4"/>
+
+  <!-- ================= LEFT BRANDING COLUMN ================= -->
+
+  <!-- Brand Emblem (72x72 from assets/logo.svg) -->
+  <g transform="translate(64, 68) scale(0.5625)">
+    <rect x="12" y="12" width="104" height="104" rx="24" fill="#0B0D12" stroke="#6895FF" stroke-opacity="0.55" stroke-width="3"/>
+    <path d="M72 28L38 72h24l-6 28 34-44H66l6-28z" fill="#6895FF"/>
+    <circle cx="94" cy="94" r="10" fill="#34D399" stroke="#0B0D12" stroke-width="4"/>
+  </g>
+
+  <!-- Org Pill + Evergreen Subtitle (ZERO hardcoded semver) -->
+  <rect x="152" y="74" width="278" height="28" rx="14" fill="#181E30" stroke="#6895FF" stroke-opacity="0.42"/>
+  <circle cx="168" cy="88" r="4" fill="#6895FF"/>
+  <text x="180" y="92.5" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" font-weight="600" fill="#82A8FF">eatingDream-antigravity-plugins</text>
+  <text x="154" y="126" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13" fill="#8A94A8">Native Rust · Google Colab CLI · MIT License</text>
+
+  <!-- Hero Title -->
+  <text x="64" y="210" font-size="56" font-weight="750" fill="#F2F4F8" letter-spacing="-1">Colab Deck</text>
+
+  <!-- Tagline -->
+  <text x="64" y="254" font-size="19" fill="#F2F4F8" font-weight="500">Colab GPUs from your sidebar, with a spending limit.</text>
+  <text x="64" y="284" font-size="18.5" fill="#A6B0C3">7-day CU balance telemetry, dual-layer auto-stop, and</text>
+  <text x="64" y="312" font-size="18.5" fill="#A6B0C3">one-click <tspan font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16.5" fill="#6EE7B7">llama.cpp</tspan> GGUF serving on <tspan font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16.5" fill="#82A8FF">127.0.0.1</tspan>.</text>
+
+  <!-- 2x2 Feature Cards -->
+  <g transform="translate(64, 348)">
+    <rect x="0" y="0" width="248" height="66" rx="12" fill="#12151E" stroke="#252B3D"/>
+    <circle cx="19" cy="23" r="4.5" fill="#6895FF"/>
+    <text x="32" y="28" font-size="14" font-weight="650" fill="#F2F4F8">7-Day CU Balance Chart</text>
+    <text x="16" y="49" font-size="12" fill="#8A94A8">Live burn rate, ETA &amp; 0600 history</text>
+
+    <rect x="262" y="0" width="248" height="66" rx="12" fill="#12151E" stroke="#252B3D"/>
+    <circle cx="281" cy="23" r="4.5" fill="#34D399"/>
+    <text x="294" y="28" font-size="14" font-weight="650" fill="#F2F4F8">Dual-Layer Cost Guard</text>
+    <text x="278" y="49" font-size="12" fill="#8A94A8">VM watchdog + host CU spend floors</text>
+
+    <rect x="0" y="80" width="248" height="66" rx="12" fill="#12151E" stroke="#252B3D"/>
+    <circle cx="19" cy="103" r="4.5" fill="#FBBF24"/>
+    <text x="32" y="108" font-size="14" font-weight="650" fill="#F2F4F8">127.0.0.1 SSH Forwards</text>
+    <text x="16" y="129" font-size="12" fill="#8A94A8">Zero ~/.ssh/config edits · port 8080 safe</text>
+
+    <rect x="262" y="80" width="248" height="66" rx="12" fill="#12151E" stroke="#252B3D"/>
+    <circle cx="281" cy="103" r="4.5" fill="#82A8FF"/>
+    <text x="294" y="108" font-size="14" font-weight="650" fill="#F2F4F8">1-Click GGUF Deploy</text>
+    <text x="278" y="129" font-size="12" fill="#8A94A8">VRAM quant fit · /v1 llama.cpp logs</text>
+  </g>
+
+  <!-- Footer Divider & Repo URL -->
+  <line x1="64" y1="534" x2="574" y2="534" stroke="#23293A" stroke-width="1"/>
+  <text x="64" y="566" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13.5" fill="#8A94A8">github.com/<tspan fill="#F2F4F8">eatingDream-antigravity-plugins/colab-deck</tspan></text>
+
+  <!-- ================= RIGHT MCP APP PANEL PREVIEW ================= -->
+
+  <rect x="614" y="44" width="606" height="552" rx="18" fill="#10131C" stroke="#2B3246" stroke-width="1.5"/>
+  <line x1="648" y1="45.5" x2="1186" y2="45.5" stroke="#F2F4F8" stroke-opacity="0.14" stroke-width="1"/>
+
+  <!-- Panel Header -->
+  <g transform="translate(636, 62)">
+    <rect x="0" y="3" width="22" height="22" rx="6" fill="#6895FF" fill-opacity="0.16"/>
+    <path d="M13 7L7 15h4l-1 6 6-8h-4l1-6z" fill="#6895FF"/>
+    <circle cx="20" cy="23" r="3.5" fill="#34D399" stroke="#10131C" stroke-width="1.5"/>
+    <text x="31" y="19" font-size="15.5" font-weight="650" fill="#F2F4F8">Colab Deck</text>
+
+    <rect x="122" y="3" width="90" height="22" rx="6" fill="#6895FF" fill-opacity="0.16"/>
+    <text x="167" y="18" text-anchor="middle" font-size="10.5" font-weight="600" fill="#82A8FF">Google sign-in</text>
+
+    <rect x="392" y="3" width="76" height="22" rx="11" fill="#181C28"/>
+    <circle cx="404" cy="14" r="3" fill="#34D399"/>
+    <text x="413" y="18" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#A6B0C3">Auto · 4s</text>
+
+    <rect x="474" y="3" width="56" height="22" rx="11" fill="#181C28"/>
+    <rect x="476" y="5" width="24" height="18" rx="9" fill="#12151E"/>
+    <text x="488" y="17.5" text-anchor="middle" font-size="10" font-weight="600" fill="#F2F4F8">EN</text>
+    <text x="514" y="17.5" text-anchor="middle" font-size="10" fill="#6E788E">中文</text>
+
+    <rect x="536" y="0" width="28" height="28" rx="8" fill="#181C28" stroke="#2B3246"/>
+    <path d="M555 14a5 5 0 1 1-1.5-3.5M555 9v3h-3" stroke="#A6B0C3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+
+  <!-- Tabs Bar -->
+  <rect x="636" y="102" width="562" height="32" rx="8" fill="#181C28"/>
+  <rect x="639" y="105" width="84" height="26" rx="6" fill="#12151E"/>
+  <text x="681" y="122" text-anchor="middle" font-size="12" font-weight="600" fill="#F2F4F8">Overview</text>
+  <text x="774" y="122" text-anchor="middle" font-size="12" fill="#A6B0C3">Sessions (2)</text>
+  <text x="866" y="122" text-anchor="middle" font-size="12" fill="#A6B0C3">Ports (1)</text>
+  <text x="942" y="122" text-anchor="middle" font-size="12" fill="#A6B0C3">Deploy</text>
+  <text x="1014" y="122" text-anchor="middle" font-size="12" fill="#A6B0C3">Settings</text>
+
+  <!-- Hero 4-KPI Card -->
+  <rect x="636" y="146" width="562" height="106" rx="12" fill="#12151E" stroke="#252B3D"/>
+  <line x1="776" y1="158" x2="776" y2="240" stroke="#23293A"/>
+  <line x1="916" y1="158" x2="916" y2="240" stroke="#23293A"/>
+  <line x1="1056" y1="158" x2="1056" y2="240" stroke="#23293A"/>
+
+  <text x="652" y="170" font-size="10" fill="#6E788E" letter-spacing="0.6">BALANCE</text>
+  <text x="652" y="198" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="21" font-weight="700" fill="#F2F4F8">412.60 <tspan font-size="11" fill="#6E788E">CU</tspan></text>
+  <text x="652" y="220" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#6E788E">Google (default)</text>
+
+  <text x="792" y="170" font-size="10" fill="#6E788E" letter-spacing="0.6">USAGE RATE</text>
+  <text x="792" y="198" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="21" font-weight="700" fill="#F2F4F8">8.90 <tspan font-size="11" fill="#6E788E">CU/h</tspan></text>
+  <text x="792" y="220" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#6E788E">Lasts ~1d 22h</text>
+
+  <text x="932" y="170" font-size="10" fill="#6E788E" letter-spacing="0.6">RUNNING</text>
+  <circle cx="937" cy="192" r="3.5" fill="#34D399"/>
+  <text x="948" y="198" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="21" font-weight="700" fill="#F2F4F8">2</text>
+  <text x="932" y="220" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#6E788E">1 G4 · 1 T4 ext</text>
+
+  <text x="1072" y="170" font-size="10" fill="#6E788E" letter-spacing="0.6">SPENDING LIMITS</text>
+  <circle cx="1077" cy="192" r="3.5" fill="#34D399"/>
+  <text x="1087" y="197" font-size="16" font-weight="650" fill="#F2F4F8">On</text>
+  <text x="1072" y="220" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#6E788E">1/2 auto-stop</text>
+
+  <!-- Flagship 7-Day Balance Over Time Sparkline Card -->
+  <rect x="636" y="264" width="562" height="160" rx="12" fill="#12151E" stroke="#252B3D"/>
+  <text x="652" y="288" font-size="10.5" fill="#6E788E" letter-spacing="0.6">BALANCE OVER TIME</text>
+  <text x="778" y="288" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11" fill="#8A94A8">-84.20 CU</text>
+
+  <!-- Range Pills: 1h 6h 24h [7d] All -->
+  <rect x="1032" y="272" width="150" height="22" rx="11" fill="#181C28"/>
+  <text x="1048" y="286.5" text-anchor="middle" font-size="10.5" fill="#6E788E">1h</text>
+  <text x="1076" y="286.5" text-anchor="middle" font-size="10.5" fill="#6E788E">6h</text>
+  <text x="1105" y="286.5" text-anchor="middle" font-size="10.5" fill="#6E788E">24h</text>
+  <rect x="1123" y="274" width="28" height="18" rx="9" fill="#12151E"/>
+  <text x="1137" y="286.5" text-anchor="middle" font-size="10.5" font-weight="600" fill="#F2F4F8">7d</text>
+  <text x="1166" y="286.5" text-anchor="middle" font-size="10.5" fill="#6E788E">All</text>
+
+  <!-- Y Axis Labels -->
+  <text x="706" y="318" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10" fill="#6E788E">496.80 CU</text>
+  <text x="706" y="354" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10" fill="#6E788E">454.70</text>
+  <text x="706" y="390" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10" fill="#6E788E">412.60 CU</text>
+
+  <!-- Gridlines & 7d Sparkline -->
+  <path d="M716 314 H1180 M716 350 H1180 M716 386 H1180" stroke="#23293A" stroke-width="1"/>
+  <path d="M716 314 L772 316 L838 338 L924 342 L1012 365 L1088 369 L1152 380 L1180 386 L1180 386 L716 386 Z" fill="url(#spark-fill)"/>
+  <polyline points="716,314 772,316 838,338 924,342 1012,365 1088,369 1152,380 1180,386" fill="none" stroke="#6895FF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="716" y="408" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10" fill="#6E788E">7d ago</text>
+  <text x="948" y="408" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10" fill="#6E788E">3d ago</text>
+  <text x="1180" y="408" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10" fill="#6E788E">Now</text>
+
+  <!-- Active G4 Runtime & Ready GGUF Endpoint Card -->
+  <rect x="636" y="436" width="562" height="92" rx="12" fill="#12151E" stroke="#252B3D"/>
+  <text x="652" y="462" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" font-weight="700" fill="#F2F4F8">c-g4-train</text>
+  <rect x="748" y="447" width="30" height="20" rx="6" fill="#34D399" fill-opacity="0.16"/>
+  <text x="763" y="461" text-anchor="middle" font-size="10.5" font-weight="600" fill="#34D399">G4</text>
+  <rect x="786" y="447" width="142" height="20" rx="6" fill="#34D399" fill-opacity="0.16"/>
+  <text x="857" y="461" text-anchor="middle" font-size="10.5" font-weight="600" fill="#34D399">Auto-stop on · 1h 25m</text>
+
+  <rect x="1062" y="446" width="120" height="24" rx="7" fill="#F87171" fill-opacity="0.14"/>
+  <text x="1122" y="462" text-anchor="middle" font-size="11" font-weight="600" fill="#F87171">Stop &amp; end billing</text>
+
+  <text x="652" y="486" font-size="11.5" fill="#A6B0C3">NVIDIA RTX PRO 6000 Blackwell · 96 GB · 8.90 CU/h (measured)</text>
+  <rect x="652" y="497" width="530" height="22" rx="6" fill="#181C28"/>
+  <circle cx="664" cy="508" r="3" fill="#34D399"/>
+  <text x="674" y="512" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#F2F4F8">llama-cpp ready · http://127.0.0.1:8000/v1 (Q8_0, ctx 32768)</text>
+
+  <!-- Quick Actions Footer -->
+  <rect x="636" y="538" width="562" height="44" rx="12" fill="#12151E" stroke="#252B3D"/>
+  <rect x="650" y="547" width="84" height="26" rx="7" fill="#6895FF"/>
+  <text x="692" y="564" text-anchor="middle" font-size="11.5" font-weight="650" fill="#0B0D12">New GPU</text>
+  <rect x="742" y="547" width="106" height="26" rx="7" fill="#6895FF" fill-opacity="0.16"/>
+  <text x="795" y="564" text-anchor="middle" font-size="11.5" font-weight="600" fill="#82A8FF">Deploy model</text>
+  <rect x="856" y="547" width="84" height="26" rx="7" fill="#181C28" stroke="#2B3246"/>
+  <text x="898" y="564" text-anchor="middle" font-size="11.5" fill="#A6B0C3">Open port</text>
+  <text x="1182" y="564" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#6E788E">SEP-1865 · 0600 local store</text>
+</svg>

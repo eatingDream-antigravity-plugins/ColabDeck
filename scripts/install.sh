@@ -14,6 +14,8 @@ DEST="${COLAB_MCP_PLUGIN_DIR:-${PLUGINS_DIR}/colab-mcp}"
 VERSION="${COLAB_MCP_VERSION:-}"
 FROM_SOURCE=0
 UNINSTALL=0
+NO_RELOAD=0
+FORCE_RELOAD=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,6 +33,14 @@ while [ $# -gt 0 ]; do
       FROM_SOURCE=1
       shift
       ;;
+    --no-reload)
+      NO_RELOAD=1
+      shift
+      ;;
+    --reload)
+      FORCE_RELOAD=1
+      shift
+      ;;
     --uninstall)
       UNINSTALL=1
       shift
@@ -40,9 +50,11 @@ while [ $# -gt 0 ]; do
 Colab Deck (colab-mcp) installer
 
 Options:
-  -v, --version <tag>   Install a specific release tag (e.g. v0.2.2). Defaults to latest.
+  -v, --version <tag>   Install a specific release tag (e.g. v0.2.3). Defaults to latest.
   -d, --dest <path>     Target plugin directory (default: ${ANTIGRAVITY_PLUGINS_DIR:-$HOME/.gemini/config/plugins}/colab-mcp).
       --from-source     Build and install from a local repository checkout instead of GitHub Releases.
+      --reload          Outside Antigravity, toggle the plugin via `agy plugin disable/enable`.
+      --no-reload       Skip live MCP server refresh after install.
       --uninstall       Remove the installed plugin directory.
   -h, --help            Show this help message.
 EOF
@@ -73,12 +85,32 @@ if [ "$UNINSTALL" -eq 1 ]; then
 fi
 
 refresh_mcp_host() {
+  if [ "$NO_RELOAD" -eq 1 ]; then
+    return 0
+  fi
   if [ -n "${ANTIGRAVITY_CSRF_TOKEN:-}" ]; then
-    curl -sf -H "Content-Type: application/json" \
+    code="$(curl -sS -o /dev/null -w '%{http_code}' \
+      -H "Content-Type: application/json" \
       -H "x-codeium-csrf-token: ${ANTIGRAVITY_CSRF_TOKEN}" \
       -d '{"serverName": "colab-mcp_colab-mcp"}' \
-      "http://${ANTIGRAVITY_LS_ADDRESS:-localhost:5387}/exa.language_server_pb.LanguageServerService/RefreshMcpServers" >/dev/null 2>&1 || true
+      "http://${ANTIGRAVITY_LS_ADDRESS:-localhost:5387}/exa.language_server_pb.LanguageServerService/RefreshMcpServers" 2>/dev/null || true)"
+    if [ "$code" = "200" ]; then
+      printf 'Refreshed colab-mcp in Antigravity (HTTP 200). Close and reopen the Colab Deck panel tab to load updated UI.\n'
+    else
+      printf 'Could not auto-refresh colab-mcp (HTTP %s). Restart it in Customizations > Installed > colab-mcp > MCP > Restart.\n' "${code:-err}"
+    fi
+    return 0
   fi
+  if [ "$FORCE_RELOAD" -eq 1 ] && command -v agy >/dev/null 2>&1; then
+    if agy plugin list --json 2>/dev/null | grep -q '"colab-mcp"'; then
+      agy plugin disable colab-mcp >/dev/null 2>&1 && agy plugin enable colab-mcp >/dev/null 2>&1 \
+        && printf 'Reloaded colab-mcp via agy CLI. Reopen the Colab Deck panel tab to load updated UI.\n' \
+        || printf 'Reload failed. Run: agy plugin disable colab-mcp && agy plugin enable colab-mcp\n'
+      return 0
+    fi
+  fi
+  printf 'Note: reloading stops active local SSH port forwards (remote Colab sessions keep running).\n'
+  printf 'To apply updates: run `agy plugin disable colab-mcp && agy plugin enable colab-mcp` or Customizations > Installed > colab-mcp > MCP > Restart.\n'
 }
 
 install_from_source() {
@@ -89,7 +121,7 @@ install_from_source() {
     exit 1
   fi
 
-  (cd "${REPO_ROOT}/panel" && npm ci --no-audit --no-fund && node pack.mjs)
+  (cd "${REPO_ROOT}/panel" && npm ci --ignore-scripts --no-audit --no-fund && node pack.ts)
   (
     cd "${REPO_ROOT}"
     CARGO_HOME_DIR="${CARGO_HOME:-${HOME}/.cargo}"

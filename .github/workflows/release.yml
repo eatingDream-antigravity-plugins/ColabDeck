@@ -83,7 +83,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Install Rust target
         run: rustup target add "${{ matrix.target }}"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
@@ -91,9 +91,11 @@ jobs:
           key: release-${{ matrix.target }}
       - name: Build and test panel HTML
         run: |
-          (cd panel && npm ci --no-audit --no-fund)
-          node panel/pack.mjs
-          node --test panel/test/panel.test.mjs
+          (cd panel && npm ci --ignore-scripts --no-audit --no-fund)
+          npm --prefix panel run typecheck
+          npm --prefix panel run build
+          npm --prefix panel test
+          git diff --exit-code -- panel/dist/panel.html
       - name: Run Rust tests
         run: cargo test --locked
       - name: Build, verify, and package tarball

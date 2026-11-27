@@ -1,8 +1,9 @@
 //! JSON-RPC MCP session negotiation and bounded stdio dispatch.
 
+use crate::error::Error;
 use crate::mcp::coordinator::{AccountContext, ColabCoordinator};
 use crate::mcp::tools::{
-    call_tool_json, err_result, list_resources_json, list_tools_json, pin_tool_context,
+    call_tool_json, err_from, list_resources_json, list_tools_json, pin_tool_context,
     read_resource_json, tool_allowed, validate_arguments, HtmlLoader, APP_MIME, APP_URI,
     SERVER_NAME, SERVER_VERSION,
 };
@@ -37,7 +38,7 @@ struct Request {
     params: Value,
     ui: bool,
     entered: Instant,
-    context: Option<Result<Box<AccountContext>, String>>,
+    context: Option<Result<Box<AccountContext>, Error>>,
 }
 
 enum Dispatch {
@@ -250,8 +251,7 @@ impl Request {
         }
         let tool = self.params["name"].as_str().unwrap();
         let args = &self.params["arguments"];
-        self.context = pin_tool_context(tool, args, coord)
-            .map(|result| result.map(Box::new).map_err(|error| error.message));
+        self.context = pin_tool_context(tool, args, coord).map(|result| result.map(Box::new));
         self
     }
 
@@ -272,7 +272,7 @@ impl Request {
                 let args = self.params.get("arguments").unwrap_or(&empty);
                 let context = match self.context.transpose() {
                     Ok(context) => context.map(|ctx| *ctx),
-                    Err(message) => return response(&self.id, err_result(message)),
+                    Err(error) => return response(&self.id, err_from(&error)),
                 };
                 let mut result = call_tool_json(name, args, coord, self.entered, context);
                 if !matches!(name, "colab_panel" | "colab_status" | "colab_app_poll")

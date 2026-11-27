@@ -1,6 +1,6 @@
 # Colab Deck (`colab-mcp`)
 
-> Rust server for the Model Context Protocol (MCP) and an interactive Google Colab panel. It uses the local Colab CLI for runtime lifecycle and billing telemetry. Homepage: https://colabdeck.eatingdream.dev
+> Rust server for the Model Context Protocol (MCP) and the interactive Colab Deck sidebar for Google Colab. It uses the local Colab CLI for runtime lifecycle and billing telemetry. Homepage: https://colabdeck.eatingdream.dev
 
 - [Homepage](https://colabdeck.eatingdream.dev)
 - [Agent guide](docs/ai-guide.md)

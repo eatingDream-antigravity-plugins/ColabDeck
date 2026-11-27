@@ -4,15 +4,17 @@
 
 # Colab Deck (`colab-mcp`)
 
-**在 Antigravity 内一键启动、监控并自动止损 Google Colab GPU —— 彻底告别忘关实例烧光算力单元。**
+**在侧边栏管理 Colab GPU，自带花费上限和自动停止。**
+
+不用打开浏览器标签页，就能启动、查看和停止 Colab 会话，转发本地端口，并部署 GGUF 模型。自动停止与花费保护避免闲置 GPU 一夜耗光余额。
 
 [主页](https://colabdeck.eatingdream.dev) · [English](README.md) | 简体中文 · [Releases](https://github.com/eatingDream-antigravity-plugins/colab-deck/releases) · [AI 指南](docs/ai-guide.md) · [`llms.txt`](llms.txt)
 
 [![CI](https://github.com/eatingDream-antigravity-plugins/colab-deck/actions/workflows/ci.yml/badge.svg)](https://github.com/eatingDream-antigravity-plugins/colab-deck/actions/workflows/ci.yml)
 [![Release](assets/release-badge.svg)](https://github.com/eatingDream-antigravity-plugins/colab-deck/releases)
-![Built with Rust](https://img.shields.io/badge/built%20with-Rust-1A1916?logo=rust&logoColor=white)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-555)
+![Built with Rust](https://img.shields.io/badge/built%20with-Rust-12151E?logo=rust&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2952CC)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-181C28)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/colabdeck-sessions-dark.png">
@@ -29,7 +31,7 @@
 
 ## 为什么选择 Colab Deck
 
-- **再也不怕忘关 GPU 烧算力**：虚拟机端独立看门狗（硬截止时间 + 空闲自动停机，合盖离线依然生效）搭配主机端花费上限与余额底线守卫，并支持一键清理浏览器里遗留的 `[?]` 未托管实例。
+- **再也不怕忘关 GPU 烧算力**：虚拟机端独立看门狗（硬截止时间 + 空闲自动停机，合盖离线依然生效）搭配主机端花费上限与余额底线守卫，并支持一键清理在浏览器中启动的外部实例。
 - **精准抽卡显存与多账号隔离**：按需申请 CPU/GPU/TPU，支持 `min_vram_mib` 自动重试（例如确保拿到 80 GB A100），同时支持 ADC 与多账号 OAuth2 实时余额及燃烧速率监控。
 - **安全独占的本地 SSH 端口转发**：将远端服务直接映射到 `127.0.0.1`，不改写 `~/.ssh/config`，禁止占用 VM 保留端口 `8080`，拒绝盲目重连导致静默新开计费实例。
 - **一键部署 GGUF 推理服务**：在面板内直接搜索 Hugging Face GGUF 模型、提前估算各卡显存量化适配度，一键在 Colab GPU 上拉起 `llama.cpp` 并转发本地 `/v1` 接口与实时日志。
@@ -43,7 +45,7 @@
 curl -fsSL https://raw.githubusercontent.com/eatingDream-antigravity-plugins/colab-deck/main/scripts/install.sh | sh
 ```
 
-<sub>自动从 GitHub Releases 下载对应平台预编译二进制（macOS Apple Silicon / Intel、Linux x86_64）、校验 SHA-256 摘要并安装到 <code>~/.gemini/config/plugins/colab-mcp</code>。如需源码编译，克隆仓库后运行 <code>./scripts/install.sh --from-source</code>。随时可执行 <code>curl -fsSL https://raw.githubusercontent.com/eatingDream-antigravity-plugins/colab-deck/main/scripts/install.sh | sh -s -- --uninstall</code> 卸载。</sub>
+<sub>自动从 GitHub Releases 下载对应平台预编译二进制（macOS Apple Silicon / Intel、Linux x86_64）、校验 SHA-256 摘要并安装到 <code>~/.gemini/config/plugins/colab-mcp</code>。如需源码编译，克隆仓库后运行 <code>./scripts/install.sh --from-source</code>。在 Antigravity 内安装时会自动通过 <code>RefreshMcpServers</code> 热重载 MCP 服务（传入 <code>--no-reload</code> 可跳过；在 Antigravity 外部可传 <code>--reload</code> 通过 <code>agy</code> 切换重载）。随时可执行 <code>curl -fsSL https://raw.githubusercontent.com/eatingDream-antigravity-plugins/colab-deck/main/scripts/install.sh | sh -s -- --uninstall</code> 卸载。</sub>
 
 重载 Antigravity 即可打开 **Colab Deck**，或先用零计费演示模式体验：
 
@@ -80,7 +82,7 @@ npx skills add eatingDream-antigravity-plugins/colab-deck
 
 ## Antigravity 插件套件
 
-隶属于 [eatingDream Antigravity 插件套件](https://eatingdream.dev)：[Context Radar](https://github.com/eatingDream-antigravity-plugins/context-radar)（`context-radar-mcp`）· [Clam Guard](https://github.com/eatingDream-antigravity-plugins/clam-guard)（`mac-clamshell-mcp`）· [Remote Cast](https://github.com/eatingDream-antigravity-plugins/remote-cast)（`chrome-stream-mcp`）· **Colab Deck**（`colab-mcp`），由 [Panel Kit](https://github.com/eatingDream-antigravity-plugins/panel-kit)（`agy-mcp-kit`）统一驱动。
+属于 [Antigravity 插件套件](https://github.com/eatingDream-antigravity-plugins)：[Context Radar](https://github.com/eatingDream-antigravity-plugins/context-radar) · [Clam Guard](https://github.com/eatingDream-antigravity-plugins/clam-guard) · [Remote Cast](https://github.com/eatingDream-antigravity-plugins/remote-cast) · **Colab Deck** · [Panel Kit](https://github.com/eatingDream-antigravity-plugins/panel-kit)
 
 ## 致谢与许可证
 

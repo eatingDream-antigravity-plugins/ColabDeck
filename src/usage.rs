@@ -10,11 +10,17 @@ use crate::sessions::{
     StartSource, TrackedSession,
 };
 use crate::settings::Accelerator;
+use crate::util::{lock_file, write_atomic_private};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-pub const HISTORY_CAPACITY: usize = 120;
+pub const HISTORY_CAPACITY: usize = 320;
+pub const HISTORY_RETENTION_SECS: u64 = 7 * 24 * 3600;
+const RAW_WINDOW_SECS: u64 = 10 * 60;
+const HOUR_WINDOW_SECS: u64 = 3600;
+const DAY_WINDOW_SECS: u64 = 24 * 3600;
 const NO_RATE: f64 = 1e-9;
 const MEASURE_HOLD: u64 = 120;
 const UNMANAGED_RETENTION: u64 = 600;
@@ -93,8 +99,25 @@ pub struct BalanceHistory {
 }
 
 impl BalanceHistory {
+    pub fn from_points(mut points: Vec<BalancePoint>) -> Self {
+        points.retain(|p| p.balance_cu.is_finite());
+        points.sort_by_key(|p| p.at_secs);
+        let mut history = Self::default();
+        if let Some(last_ts) = points.last().map(|p| p.at_secs) {
+            history.points = VecDeque::from(points);
+            history.compact(last_ts);
+        }
+        history
+    }
+
     pub fn push(&mut self, at_secs: u64, balance_cu: f64) {
+        if !balance_cu.is_finite() {
+            return;
+        }
         if let Some(last) = self.points.back_mut() {
+            if at_secs < last.at_secs {
+                return;
+            }
             if last.at_secs == at_secs {
                 last.balance_cu = balance_cu;
                 return;
@@ -104,13 +127,157 @@ impl BalanceHistory {
             at_secs,
             balance_cu,
         });
-        while self.points.len() > HISTORY_CAPACITY {
-            self.points.pop_front();
+        self.compact(at_secs);
+    }
+
+    /// Tiered 7-day downsampling:
+    /// - `<= 10m`: raw samples (preserves rapid updates immediately)
+    /// - `10m..=1h`: 1-min buckets
+    /// - `1h..=24h`: 15-min buckets
+    /// - `24h..=7d`: 1-hour buckets
+    /// - `> 7d`: pruned
+    pub fn compact(&mut self, now_secs: u64) {
+        let cutoff = now_secs.saturating_sub(HISTORY_RETENTION_SECS);
+        let latest = self.points.back().copied();
+        let mut out: Vec<BalancePoint> =
+            Vec::with_capacity(self.points.len().min(HISTORY_CAPACITY));
+        let mut last_bucket: Option<(u8, u64)> = None;
+        for &pt in &self.points {
+            if pt.at_secs < cutoff || !pt.balance_cu.is_finite() {
+                continue;
+            }
+            let age = now_secs.saturating_sub(pt.at_secs);
+            let bucket = if age <= RAW_WINDOW_SECS {
+                None
+            } else if age <= HOUR_WINDOW_SECS {
+                Some((1, pt.at_secs / 60))
+            } else if age <= DAY_WINDOW_SECS {
+                Some((2, pt.at_secs / 900))
+            } else {
+                Some((3, pt.at_secs / 3600))
+            };
+            if let Some(key) = bucket {
+                if last_bucket == Some(key) {
+                    if let Some(prev) = out.last_mut() {
+                        *prev = pt;
+                    }
+                    continue;
+                }
+                last_bucket = Some(key);
+            } else {
+                last_bucket = None;
+            }
+            out.push(pt);
         }
+        if let Some(tail) = latest {
+            if tail.at_secs >= cutoff && out.last().is_none_or(|p| p.at_secs != tail.at_secs) {
+                out.push(tail);
+            }
+        }
+        if out.len() > HISTORY_CAPACITY {
+            let excess = out.len() - HISTORY_CAPACITY;
+            out.drain(..excess);
+        }
+        self.points = VecDeque::from(out);
+    }
+
+    /// Pre-seed a realistic 7-day curve for zero-billing Demo mode ending at `current_balance`.
+    pub fn seed_demo(now_secs: u64, current_balance: f64) -> Self {
+        let mut pts = Vec::new();
+        // Work backwards from now: gentle idle stretches + realistic GPU burn sessions.
+        let offsets_and_deltas: &[(u64, f64)] = &[
+            (6 * 86400 + 18 * 3600, 74.2),
+            (6 * 86400 + 6 * 3600, 68.5),
+            (5 * 86400 + 18 * 3600, 68.5),
+            (5 * 86400 + 8 * 3600, 58.1),
+            (4 * 86400 + 20 * 3600, 52.4),
+            (4 * 86400 + 6 * 3600, 52.4),
+            (3 * 86400 + 16 * 3600, 41.0),
+            (3 * 86400 + 2 * 3600, 38.6),
+            (2 * 86400 + 14 * 3600, 31.2),
+            (2 * 86400, 29.8),
+            (86400 + 14 * 3600, 22.4),
+            (86400 + 4 * 3600, 20.1),
+            (22 * 3600, 17.8),
+            (18 * 3600, 15.2),
+            (14 * 3600, 15.2),
+            (10 * 3600, 11.6),
+            (6 * 3600, 9.4),
+            (5 * 3600, 8.1),
+            (4 * 3600, 6.9),
+            (3 * 3600, 6.1),
+            (2 * 3600, 4.8),
+            (90 * 60, 3.6),
+            (55 * 60, 2.4),
+            (40 * 60, 1.8),
+            (25 * 60, 1.1),
+            (15 * 60, 0.7),
+            (5 * 60, 0.25),
+            (60, 0.05),
+        ];
+        for &(ago, extra) in offsets_and_deltas {
+            if let Some(ts) = now_secs.checked_sub(ago) {
+                pts.push(BalancePoint {
+                    at_secs: ts,
+                    balance_cu: ((current_balance + extra) * 100.0).round() / 100.0,
+                });
+            }
+        }
+        pts.push(BalancePoint {
+            at_secs: now_secs,
+            balance_cu: current_balance,
+        });
+        Self::from_points(pts)
     }
 
     pub fn points(&self) -> Vec<BalancePoint> {
         self.points.iter().copied().collect()
+    }
+}
+
+/// Atomic 0600 file-backed 7-day balance history store (`${PLUGIN_DATA}/balance_history.json`).
+#[derive(Debug, Clone)]
+pub struct BalanceHistoryStore {
+    path: PathBuf,
+    lock_path: PathBuf,
+}
+
+impl BalanceHistoryStore {
+    pub fn new(data_dir: &Path) -> Self {
+        Self {
+            path: data_dir.join("balance_history.json"),
+            lock_path: data_dir.join("balance_history.lock"),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load(&self) -> BTreeMap<String, BalanceHistory> {
+        let Ok(raw) = fs::read(&self.path) else {
+            return BTreeMap::new();
+        };
+        let Ok(map) = serde_json::from_slice::<BTreeMap<String, Vec<BalancePoint>>>(&raw) else {
+            return BTreeMap::new();
+        };
+        map.into_iter()
+            .map(|(k, pts)| (k, BalanceHistory::from_points(pts)))
+            .collect()
+    }
+
+    pub fn save_account(&self, account_id: &str, history: &BalanceHistory) {
+        let Ok(_guard) = lock_file(&self.lock_path) else {
+            return;
+        };
+        let mut map: BTreeMap<String, Vec<BalancePoint>> = fs::read(&self.path)
+            .ok()
+            .and_then(|raw| serde_json::from_slice(&raw).ok())
+            .unwrap_or_default();
+        map.insert(account_id.to_owned(), history.points());
+        if let Ok(bytes) = serde_json::to_vec(&map) {
+            let _ = write_atomic_private(&self.path, &bytes);
+        }
     }
 }
 
@@ -662,5 +829,48 @@ mod tests {
         assert_eq!(ledger.observed_unmanaged.len(), 1);
         attribute_rates(None, &[], &mut ledger, account, 1901);
         assert!(ledger.observed_unmanaged.is_empty());
+    }
+
+    #[test]
+    fn balance_history_seven_day_tiered_compaction_and_store_roundtrip() {
+        let now = 20 * 86_400;
+        let mut h = BalanceHistory::default();
+        // >7d old point should be pruned
+        h.push(now - 8 * 86_400, 150.0);
+        // 3 days ago: multiple points in same 1h bucket collapse to latest
+        h.push(now - 3 * 86_400 + 100, 130.0);
+        h.push(now - 3 * 86_400 + 200, 129.0);
+        // 6 hours ago: multiple points in same 15m bucket collapse to latest
+        h.push(now - 6 * 3600 + 60, 110.0);
+        h.push(now - 6 * 3600 + 120, 109.5);
+        // 30 minutes ago: multiple points in same 1m bucket collapse to latest
+        h.push(now - 1800 + 10, 95.0);
+        h.push(now - 1800 + 40, 94.8);
+        // Last 10 minutes: kept raw
+        h.push(now - 120, 90.2);
+        h.push(now - 60, 90.1);
+        h.push(now, 90.0);
+
+        let pts = h.points();
+        assert!(pts
+            .iter()
+            .all(|p| p.at_secs >= now - HISTORY_RETENTION_SECS));
+        assert_eq!(pts.len(), 6);
+        assert_eq!(pts[0].balance_cu, 129.0);
+        assert_eq!(pts[1].balance_cu, 109.5);
+        assert_eq!(pts[2].balance_cu, 94.8);
+        assert_eq!(pts[5].balance_cu, 90.0);
+
+        let root = PrivateDir::new(&std::env::temp_dir(), "bal-hist").unwrap();
+        let store = BalanceHistoryStore::new(root.path());
+        store.save_account("acc-a", &h);
+        let loaded = store.load().remove("acc-a").expect("loaded acc-a");
+        assert_eq!(loaded.points().len(), pts.len());
+        assert_eq!(loaded.points().last().unwrap().balance_cu, 90.0);
+
+        let demo = BalanceHistory::seed_demo(now, 84.5);
+        assert!(demo.points().len() >= 15);
+        assert_eq!(demo.points().last().unwrap().balance_cu, 84.5);
+        assert!(now - demo.points().first().unwrap().at_secs >= 6 * 86_400);
     }
 }

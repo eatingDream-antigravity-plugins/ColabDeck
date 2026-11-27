@@ -41,7 +41,7 @@ pub struct ServerSession {
 
 impl ServerSession {
     pub fn high_mem(&self) -> bool {
-        self.shape.eq_ignore_ascii_case("High-RAM")
+        self.shape.eq_ignore_ascii_case("High-RAM") || self.shape.eq_ignore_ascii_case("HIGH_RAM")
     }
 }
 

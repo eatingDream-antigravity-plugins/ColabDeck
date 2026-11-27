@@ -2,38 +2,53 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import { fileURLToPath } from "node:url";
+import { assertPanelInvariants, DEFAULT_MAX_BYTES, WARN_BYTES } from "./kit/guard.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
-const entryJs = path.join(__dirname, "app.js");
+const entryTs = path.join(__dirname, "app.ts");
+const tokensCssPath = path.join(__dirname, "kit", "tokens.css");
 const cssPath = path.join(__dirname, "styles.css");
 const templatePath = path.join(__dirname, "template.html");
 const distDir = path.join(__dirname, "dist");
 const outHtml = path.join(distDir, "panel.html");
 const BOOT_TOKEN = "/*__COLAB_MCP_BOOT__*/";
-const MODULES = ["bridge.js", "i18n.js"];
-const SIZE_FAIL_BYTES = 43_500;
-const SIZE_WARN_BYTES = 43_000;
+const MODULES = ["kit/bridge.ts", "i18n.ts"];
+const SIZE_FAIL_BYTES = DEFAULT_MAX_BYTES;
+const SIZE_WARN_BYTES = WARN_BYTES;
 
-function tryLoadEsbuild() {
+type EsbuildModule = typeof import("esbuild");
+
+interface BundleResult {
+  code: string;
+  bundler: string;
+}
+
+function tryLoadEsbuild(): EsbuildModule | null {
   if (process.env.COLAB_MCP_BUNDLER === "bun") return null;
-  for (const mod of [process.env.ESBUILD_PATH, "esbuild"].filter(Boolean)) {
-    try { return require(mod); } catch {}
+  for (const mod of [process.env.ESBUILD_PATH, "esbuild"].filter((m): m is string => Boolean(m))) {
+    try {
+      return require(mod) as EsbuildModule;
+    } catch {
+      // Optional local esbuild path unavailable.
+    }
   }
   return null;
 }
 
-function tryCliBundle() {
+function tryCliBundle(): BundleResult | null {
   let tmpDir = "";
   try {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "colab-mcp-pack-"));
-    for (const f of [...MODULES, "app.js"]) {
-      fs.writeFileSync(path.join(tmpDir, f), fs.readFileSync(path.join(__dirname, f), "utf8"), "utf8");
+    for (const f of [...MODULES, "app.ts"]) {
+      const dst = path.join(tmpDir, f);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.writeFileSync(dst, fs.readFileSync(path.join(__dirname, f), "utf8"), "utf8");
     }
-    const tmpEntry = path.join(tmpDir, "app.js");
+    const tmpEntry = path.join(tmpDir, "app.ts");
     for (const esbBin of ["esbuild", "/opt/homebrew/bin/esbuild", "/usr/local/bin/esbuild"]) {
       try {
         const out = execFileSync(
@@ -42,7 +57,9 @@ function tryCliBundle() {
           { encoding: "utf8", maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }
         );
         if (out.trim()) return { code: out.trim(), bundler: "esbuild-cli" };
-      } catch {}
+      } catch {
+        // Try next bundler candidate.
+      }
     }
     for (const bunBin of ["bun", "/opt/homebrew/bin/bun", path.join(os.homedir(), ".bun", "bin", "bun")]) {
       try {
@@ -52,17 +69,25 @@ function tryCliBundle() {
           { encoding: "utf8", maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }
         );
         if (out.trim()) return { code: out.trim(), bundler: "bun" };
-      } catch {}
+      } catch {
+        // Try next bundler candidate.
+      }
     }
     return null;
   } catch {
     return null;
   } finally {
-    if (tmpDir) try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    if (tmpDir) {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort temp cleanup.
+      }
+    }
   }
 }
 
-function cleanCss(css) {
+function cleanCss(css: string): string {
   return css
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/--buncss-[a-z0-9-]+:[^;}"']+;?/gi, "")
@@ -73,7 +98,7 @@ function cleanCss(css) {
     .trim();
 }
 
-function compactJsFallback(src) {
+function compactJsFallback(src: string): string {
   return src
     .replace(/^\s*\/\/.*$/gm, "")
     .replace(/^\s+/gm, "")
@@ -81,27 +106,30 @@ function compactJsFallback(src) {
     .trim();
 }
 
-function fallbackBundleJs() {
-  const parts = MODULES.map((f) =>
-    fs.readFileSync(path.join(__dirname, f), "utf8").replace(/^\s*export\s+/gm, "")
-  );
-  const appSrc = fs
-    .readFileSync(entryJs, "utf8")
-    .replace(/^\s*import\s+[\s\S]*?from\s+["']\.\/[^"']+["'];?\s*/gm, "");
+function stripTsModule(src: string): string {
+  const js = stripTypeScriptTypes(src, { mode: "strip" });
+  return js
+    .replace(/^\s*import\s+[\s\S]*?from\s+["']\.\/[^"']+["'];?\s*/gm, "")
+    .replace(/^\s*export\s+/gm, "");
+}
+
+function fallbackBundleJs(): string {
+  const parts = MODULES.map((f) => stripTsModule(fs.readFileSync(path.join(__dirname, f), "utf8")));
+  const appSrc = stripTsModule(fs.readFileSync(entryTs, "utf8"));
   return `(()=>{${compactJsFallback(`${parts.join("\n")}\n${appSrc}`)}})();`;
 }
 
-async function main() {
-  const rawCss = fs.readFileSync(cssPath, "utf8");
+async function main(): Promise<void> {
+  const rawCss = `${fs.readFileSync(tokensCssPath, "utf8")}\n${fs.readFileSync(cssPath, "utf8")}`;
   const esbuild = tryLoadEsbuild();
-  let jsCode;
-  let cssCode;
+  let jsCode: string;
+  let cssCode: string;
   let bundler = "fallback";
 
   if (esbuild) {
     bundler = "esbuild";
     const res = await esbuild.build({
-      entryPoints: [entryJs],
+      entryPoints: [entryTs],
       bundle: true,
       minify: true,
       treeShaking: true,
@@ -132,14 +160,20 @@ async function main() {
   const html = template.replace("/*__INLINE_CSS__*/", () => cssCode).replace("/*__INLINE_JS__*/", () => jsCode);
   const jsBytes = Buffer.byteLength(jsCode, "utf8");
   const cssBytes = Buffer.byteLength(cssCode, "utf8");
-  const totalBytes = Buffer.byteLength(html, "utf8");
-
-  if (totalBytes > SIZE_FAIL_BYTES) throw new Error(`Panel bundle ${totalBytes} B exceeds hard ${SIZE_FAIL_BYTES} B limit`);
-  if (totalBytes > SIZE_WARN_BYTES) console.warn(`WARN: Panel bundle ${totalBytes} B exceeds ${SIZE_WARN_BYTES} B warning threshold`);
+  const report = assertPanelInvariants(html, {
+    maxBytes: SIZE_FAIL_BYTES,
+    hardMaxBytes: SIZE_FAIL_BYTES,
+    warnBytes: SIZE_WARN_BYTES,
+    bootPlaceholder: BOOT_TOKEN,
+  });
+  for (const w of report.warnings) console.warn(`WARN: ${w}`);
 
   fs.mkdirSync(distDir, { recursive: true });
   fs.writeFileSync(outHtml, html, "utf8");
-  console.log(`Built ${outHtml} (${totalBytes} B / ${(totalBytes / 1024).toFixed(1)} KiB total: JS ${jsBytes} B + CSS ${cssBytes} B, bundler=${bundler})`);
+  console.log(`Built ${outHtml} (${report.bytes} B / ${(report.bytes / 1024).toFixed(1)} KiB total: JS ${jsBytes} B + CSS ${cssBytes} B, bundler=${bundler})`);
 }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+main().catch((err: unknown) => {
+  console.error(err);
+  process.exit(1);
+});

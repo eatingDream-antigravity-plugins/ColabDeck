@@ -369,19 +369,19 @@ def main():
     os.umask(0o077)
     binary_dir = tempfile.TemporaryDirectory(dir=RUN_DIR, prefix="llama-bin-")
     try:
-        write_status("running", "detect", 0.1, "Probing GPU via nvidia-smi")
+        write_status("running", "detect", 0.1, "Checking GPU")
         gpu_name, vram_mib = detect_gpu()
 
-        write_status("running", "plan", 0.2, f"Planning quantisation for {gpu_name} ({vram_mib} MiB)")
+        write_status("running", "plan", 0.2, f"Picking a quantization ({gpu_name}, {vram_mib} MiB)")
         chosen = pick_gguf_files(REPO, vram_mib, QUANT)
         if not chosen:
             raise RuntimeError(f"No GGUF files found in {REPO}")
 
-        write_status("running", "download", 0.35, f"Fetching llama.cpp + {chosen['quant']}")
+        write_status("running", "download", 0.35, f"Downloading model ({chosen['quant']})")
         server_bin = ensure_llama_server(pathlib.Path(binary_dir.name))
         model_path = download_model(REPO, chosen["files"])
 
-        write_status("running", "server", 0.75, f"Starting llama-server on 127.0.0.1:{PORT}")
+        write_status("running", "server", 0.75, f"Starting server on port {PORT}")
         with socket.socket() as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", PORT))
@@ -432,7 +432,7 @@ def main():
 
         if API_KEY:
             key_file.unlink()
-        write_status("running", "warmup", 0.9, "Running CUDA warmup completion")
+        write_status("running", "warmup", 0.9, "Warming up")
         body = json.dumps({"model": model_id, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4}).encode()
         req_headers = {"Content-Type": "application/json"}
         if API_KEY:
@@ -454,7 +454,7 @@ def main():
             "ready",
             "warmup",
             1.0,
-            f"Serving {model_id} ({chosen['quant']}) on port {PORT}",
+            f"Serving {model_id} ({chosen['quant']})",
             outputs={"model_id": model_id, "quant": chosen["quant"], "gpu": gpu_name, "port": PORT},
         )
         serve_until_exit()

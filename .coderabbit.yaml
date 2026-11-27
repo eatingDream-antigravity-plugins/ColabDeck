@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "en-US"
+
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: true
+  request_changes_workflow: false
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_title_keywords:
+      - "chore(main): release"
+  path_filters:
+    - "!CHANGELOG.md"
+    - "!**/package-lock.json"
+    - "!Cargo.lock"
+    - "!**/panel/dist/panel.html"
+    - "!docs/screenshots/**"
+    - "!assets/*.png"
+  path_instructions:
+    - path: "src/**/*.rs"
+      instructions: |
+        - Enforce `clippy` (`-D warnings`) cleanliness, fail-closed provisioning and watchdog state, and `--mock` / compile-time test guards so tests never invoke live `colab` binaries or spend Compute Units.
+        - Verify SSH port forwards bind strictly to `127.0.0.1` without modifying `~/.ssh/config`, secrets/accounts remain unlogged, and MCP tool IDs stay <= 64 characters.
+    - path: "tests/**/*.{rs,py}"
+      instructions: |
+        - Verify tests stay zero-billing, offline, and deterministic with mock guards enabled.
+    - path: "panel/**/*.{ts,css}"
+      instructions: |
+        - Enforce strict erasable TypeScript, `default-src 'none'` CSP compliance, no `innerHTML` or untrusted DOM injection, `panel/dist/panel.html` staying <= 64 KiB, and EN+ZH i18n parity.
+    - path: "{plugin/**,skills/**}"
+      instructions: |
+        - Verify `plugin/rules/AGENTS.md` stays plain markdown <= 400 B and distinct from root `AGENTS.md`, and runtime workflows stay in `skills/colab-panel/SKILL.md`.

@@ -1,7 +1,7 @@
 {
   "name": "colab-mcp",
   "displayName": "Colab Deck",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Interactive Google Colab control panel for Antigravity: ADC and multi-account billing telemetry, GPU sessions with VRAM retry, dual-layer cost guards, SSH port forwarding, and declarative VM plugins.",
   "author": {
     "name": "eatingDream",

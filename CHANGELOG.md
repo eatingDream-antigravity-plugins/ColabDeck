@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.2.3...v0.3.0) (2026-11-27)
+
+
+### Features
+
+* Lucid Indigo 64 KiB TS panel, 7-day persisted balance chart, settings hot-reload, and P0 fixes ([#12](https://github.com/eatingDream-antigravity-plugins/colab-deck/issues/12)) ([72cd9a5](https://github.com/eatingDream-antigravity-plugins/colab-deck/commit/72cd9a5c3755124112ea1bf8dab49710a5fe01a3))
+
 ## [0.2.3](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.2.2...v0.2.3) (2026-11-27)
 
 

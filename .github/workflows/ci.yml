@@ -25,12 +25,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Build and test panel
         run: |
-          (cd panel && npm ci --no-audit --no-fund)
-          node panel/pack.mjs
-          node --test panel/test/panel.test.mjs
+          (cd panel && npm ci --ignore-scripts --no-audit --no-fund)
+          npm --prefix panel run typecheck
+          npm --prefix panel run build
+          npm --prefix panel test
+          git diff --exit-code -- panel/dist/panel.html
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Rustfmt check
         run: cargo fmt --check

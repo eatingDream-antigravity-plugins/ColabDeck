@@ -4,7 +4,7 @@
 //! `error` and `util`, never on CLI, sessions, usage, guards, tunnels, or MCP.
 
 use crate::error::{Error, Result};
-use crate::util::write_atomic_private;
+use crate::util::{lock_file, write_atomic_private};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -246,6 +246,7 @@ impl Defaults {
 pub struct Settings {
     pub auth_mode: AuthMode,
     pub backend_mode: BackendMode,
+    #[serde(alias = "lang")]
     pub locale: String,
     pub defaults: Defaults,
 }
@@ -266,6 +267,7 @@ impl Default for Settings {
 pub struct SettingsPatch {
     pub auth_mode: Option<AuthMode>,
     pub backend_mode: Option<BackendMode>,
+    #[serde(alias = "lang")]
     pub locale: Option<String>,
     pub accelerator: Option<Accelerator>,
     pub high_mem: Option<bool>,
@@ -292,21 +294,88 @@ pub(crate) fn present_nullable<'de, T: Deserialize<'de>, D: serde::Deserializer<
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// File identity fingerprint for non-destructive live hot-reload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingsStamp {
+    pub mtime_ns: i128,
+    pub size: u64,
+    pub ino: u64,
+}
+
+impl SettingsStamp {
+    fn from_meta(meta: &fs::Metadata) -> Self {
+        let mtime_ns = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as i128);
+        #[cfg(unix)]
+        let ino = {
+            use std::os::unix::fs::MetadataExt;
+            meta.ino()
+        };
+        #[cfg(not(unix))]
+        let ino = 0;
+        Self {
+            mtime_ns,
+            size: meta.len(),
+            ino,
+        }
+    }
+}
+
 /// Atomic file-backed Settings store (`${PLUGIN_DATA}/settings.json`).
 #[derive(Debug, Clone)]
 pub struct SettingsStore {
     path: PathBuf,
+    lock_path: PathBuf,
 }
 
 impl SettingsStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             path: data_dir.join("settings.json"),
+            lock_path: data_dir.join("settings.lock"),
         }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub fn stamp(&self) -> Option<SettingsStamp> {
+        fs::symlink_metadata(&self.path)
+            .ok()
+            .filter(|meta| meta.file_type().is_file())
+            .map(|meta| SettingsStamp::from_meta(&meta))
+    }
+
+    /// Non-destructive live hot-reload check. Tracks `(mtime_ns, size, ino)` so
+    /// external edits to `settings.json` take effect on the next tick without
+    /// ever renaming/quarantining a syntactically invalid file.
+    pub fn reload_if_changed(
+        &self,
+        last_stamp: &mut Option<SettingsStamp>,
+    ) -> Result<Option<Settings>> {
+        let current = match fs::symlink_metadata(&self.path) {
+            Ok(meta) if meta.file_type().is_file() => Some(SettingsStamp::from_meta(&meta)),
+            Ok(_) => {
+                return Err(Error::invalid(
+                    "settings",
+                    "settings.json must be a regular file",
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(Error::invalid("settings", "cannot stat settings.json")),
+        };
+        if current == *last_stamp {
+            return Ok(None);
+        }
+        *last_stamp = current;
+        if current.is_none() {
+            return Ok(Some(Settings::default()));
+        }
+        self.load_current().map(Some)
     }
 
     /// Load settings; if corrupt JSON is encountered, move aside to `.corrupt` and fall back cleanly.
@@ -330,15 +399,21 @@ impl SettingsStore {
     }
 
     pub fn save(&self, settings: &Settings) -> Result<()> {
-        settings.defaults.validate()?;
-        let payload = serde_json::to_vec_pretty(settings)?;
-        write_atomic_private(&self.path, &payload)
+        let _guard = lock_file(&self.lock_path)?;
+        self.save_locked(settings)
     }
 
     pub fn apply_patch(&self, patch: SettingsPatch) -> Result<Settings> {
+        let _guard = lock_file(&self.lock_path)?;
         let cur = self.load_current()?.patched(patch)?;
-        self.save(&cur)?;
+        self.save_locked(&cur)?;
         Ok(cur)
+    }
+
+    fn save_locked(&self, settings: &Settings) -> Result<()> {
+        settings.defaults.validate()?;
+        let payload = serde_json::to_vec_pretty(settings)?;
+        write_atomic_private(&self.path, &payload)
     }
 
     pub(crate) fn load_current(&self) -> Result<Settings> {
@@ -465,5 +540,48 @@ mod tests {
         assert!(Accelerator::A100.supports_high_mem());
         assert_eq!(Accelerator::TpuV6e1.new_flags(), vec!["--tpu", "v6e1"]);
         assert_eq!(Accelerator::from_label("CPU"), Some(Accelerator::None));
+    }
+
+    #[test]
+    fn reload_if_changed_hot_reloads_and_fails_closed_without_quarantine() {
+        let dir = std::env::temp_dir().join(format!("colab-mcp-reload-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(&dir);
+        let initial = store
+            .apply_patch(SettingsPatch {
+                locale: Some("zh-CN".into()),
+                ..Default::default()
+            })
+            .expect("seed settings");
+        assert_eq!(initial.locale, "zh-CN");
+
+        let mut stamp = store.stamp();
+        assert_eq!(store.reload_if_changed(&mut stamp).unwrap(), None);
+
+        // External edit using `lang` alias + polling cadence updates
+        fs::write(
+            store.path(),
+            r#"{"lang":"en","backend_mode":"mock","defaults":{"poll_active_secs":15,"poll_idle_secs":120}}"#,
+        )
+        .unwrap();
+        let reloaded = store
+            .reload_if_changed(&mut stamp)
+            .expect("valid reload")
+            .expect("should detect changed file");
+        assert_eq!(reloaded.locale, "en");
+        assert_eq!(reloaded.backend_mode, BackendMode::Mock);
+        assert_eq!(reloaded.defaults.poll_active_secs, 15);
+        assert_eq!(reloaded.defaults.poll_idle_secs, 120);
+
+        // Second check with same file identity is a no-op
+        assert_eq!(store.reload_if_changed(&mut stamp).unwrap(), None);
+
+        // Invalid syntax fails closed without quarantining or deleting settings.json
+        fs::write(store.path(), "{broken json").unwrap();
+        assert!(store.reload_if_changed(&mut stamp).is_err());
+        assert!(store.path().exists());
+        assert!(!store.path().with_extension("json.corrupt").exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -26,12 +26,12 @@ use crate::sessions::{
 };
 use crate::settings::{
     present_nullable, Accelerator, AuthMode, BackendMode, Defaults, GuardPolicy, Settings,
-    SettingsPatch, SettingsStore,
+    SettingsPatch, SettingsStamp, SettingsStore,
 };
 use crate::tunnel::{TunnelInfo, TunnelManager, TunnelSpec, TunnelState};
 use crate::usage::{
     attribute_rates_with_history, published_rate, session_estimated_rate, BalanceHistory,
-    UsageSnapshot,
+    BalanceHistoryStore, UsageSnapshot,
 };
 use crate::util::{
     display_path, generate_session_name, now_millis, now_secs, redact_json, redact_secrets,
@@ -156,6 +156,7 @@ struct AccountSample {
     decisions: BTreeMap<String, Decision>,
     env: Option<EnvironmentCheck>,
     error: Option<String>,
+    error_kind: Option<String>,
     attempted: Option<Instant>,
     sampled_at: Option<u64>,
     guard_paused: bool,
@@ -188,6 +189,8 @@ impl Flight {
 struct CoordinatorState {
     settings: Settings,
     real_settings: Settings,
+    settings_stamp: Option<SettingsStamp>,
+    settings_error: Option<String>,
     real_accounts: AccountRegistry,
     real_accounts_error: Option<Error>,
     mock_accounts: AccountRegistry,
@@ -295,6 +298,7 @@ pub struct ColabCoordinator {
     settings_store: SettingsStore,
     account_store: AccountStore,
     ledger_store: SessionLedger,
+    history_store: BalanceHistoryStore,
     plugin_store: PluginStore,
     host: Host,
     real_backend: Arc<RealCliBackend>,
@@ -373,12 +377,17 @@ impl ColabCoordinator {
         let settings_store = SettingsStore::new(&data_dir);
         let account_store = AccountStore::new(&data_dir);
         let ledger_store = SessionLedger::new(&data_dir);
+        let history_store = BalanceHistoryStore::new(&data_dir);
         let plugin_store = PluginStore::new(&data_dir);
-        let real_settings = if force_mock == Some(true) {
-            settings_store.load_current().unwrap_or_default()
+        let (real_settings, settings_error) = if force_mock == Some(true) {
+            (settings_store.load_current().unwrap_or_default(), None)
         } else {
-            settings_store.load().0
+            match settings_store.load_current() {
+                Ok(settings) => (settings, None),
+                Err(error) => (Settings::default(), Some(error.message)),
+            }
         };
+        let settings_stamp = settings_store.stamp();
         let mut settings = real_settings.clone();
         if let Some(mock) = force_mock {
             settings.backend_mode = if mock {
@@ -408,6 +417,31 @@ impl ColabCoordinator {
         } else {
             AccountRegistry::default_with_adc()
         };
+        let mut samples = BTreeMap::new();
+        if force_mock != Some(true) {
+            for (account_id, history) in history_store.load() {
+                samples.insert(
+                    AccountKey {
+                        mode: BackendMode::Real,
+                        id: account_id,
+                    },
+                    AccountSample {
+                        history,
+                        ..AccountSample::default()
+                    },
+                );
+            }
+        }
+        samples.insert(
+            AccountKey {
+                mode: BackendMode::Mock,
+                id: ADC_ACCOUNT_ID.to_owned(),
+            },
+            AccountSample {
+                history: BalanceHistory::seed_demo(now_secs(), 486.40),
+                ..AccountSample::default()
+            },
+        );
         let plugins = Arc::new(plugin_store.list());
         let (refresh_signal, refresh_requests) = mpsc::sync_channel(1);
         let coord = Arc::new(Self {
@@ -419,6 +453,7 @@ impl ColabCoordinator {
             settings_store,
             account_store,
             ledger_store,
+            history_store,
             plugin_store,
             host,
             force_mock,
@@ -426,6 +461,8 @@ impl ColabCoordinator {
             state: Mutex::new(CoordinatorState {
                 settings,
                 real_settings,
+                settings_stamp,
+                settings_error,
                 mock_accounts,
                 real_accounts: accounts,
                 real_accounts_error,
@@ -434,7 +471,7 @@ impl ColabCoordinator {
                 mock_ledger: LedgerData::default(),
                 real_guard_enabled,
                 real_ledger_error,
-                samples: BTreeMap::new(),
+                samples,
                 flights: BTreeMap::new(),
                 mock_endpoint_gates: BTreeMap::new(),
                 reservations: BTreeMap::new(),
@@ -732,9 +769,69 @@ impl ColabCoordinator {
         self.shutdown.check()
     }
 
+    pub fn reload_settings_if_changed(&self) -> bool {
+        if self.force_mock == Some(true) {
+            return false;
+        }
+        let disk_stamp = self.settings_store.stamp();
+        let mut tracked = {
+            let state = self.state.lock().unwrap();
+            if state.settings_stamp == disk_stamp {
+                return false;
+            }
+            state.settings_stamp
+        };
+        let _write = self.config_write.lock().unwrap();
+        let outcome = self.settings_store.reload_if_changed(&mut tracked);
+        let mut state = self.state.lock().unwrap();
+        state.settings_stamp = tracked;
+        match outcome {
+            Ok(Some(mut loaded)) => {
+                if let Some(mock) = self.force_mock {
+                    loaded.backend_mode = if mock {
+                        BackendMode::Mock
+                    } else {
+                        BackendMode::Real
+                    };
+                }
+                let prev_active = state.settings.clone();
+                if loaded.auth_mode != state.real_settings.auth_mode {
+                    self.real_backend
+                        .invalidate_credentials(Some(ADC_ACCOUNT_ID));
+                }
+                state.real_settings = loaded.clone();
+                if state.settings.backend_mode == BackendMode::Real
+                    || loaded.backend_mode == BackendMode::Mock
+                {
+                    state.settings = loaded;
+                } else {
+                    state.settings.locale = loaded.locale;
+                    state.settings.defaults = loaded.defaults;
+                }
+                let changed = state.settings != prev_active || state.settings_error.is_some();
+                state.settings_error = None;
+                if changed {
+                    state.config_changed();
+                }
+                changed
+            }
+            Ok(None) => false,
+            Err(error) => {
+                let msg = Some(error.message);
+                let changed = state.settings_error != msg;
+                state.settings_error = msg;
+                changed
+            }
+        }
+    }
+
     pub fn guard_tick(self: &Arc<Self>) {
+        let mut changed = self.reload_settings_if_changed();
         let real_guard_enabled = self.state.lock().unwrap().real_guard_enabled;
         if real_guard_enabled && self.reload_real_ledger() {
+            changed = true;
+        }
+        if changed {
             self.publish();
         }
         let keys = {
@@ -861,6 +958,7 @@ impl ColabCoordinator {
         };
         sample.attempted = Some(Instant::now());
         sample.error = None;
+        sample.error_kind = None;
         if env.is_some() {
             sample.env = env;
         }
@@ -875,6 +973,9 @@ impl ColabCoordinator {
         match reading {
             Ok(reading) => {
                 sample.history.push(now, reading.balance_cu);
+                if key.mode == BackendMode::Real {
+                    self.history_store.save_account(&key.id, &sample.history);
+                }
                 sample.usage = Some(UsageSnapshot::from_reading(reading, now));
             }
             Err(_) => {
@@ -885,6 +986,7 @@ impl ColabCoordinator {
         }
         if let Some(error) = &refresh_error {
             sample.error = Some(error.message.clone());
+            sample.error_kind = Some(error.ui_kind().to_owned());
         }
         let default_history = if self.history_dir.is_none()
             && key.mode == BackendMode::Real
@@ -1152,6 +1254,9 @@ impl ColabCoordinator {
     }
 
     pub fn panel_snapshot(self: &Arc<Self>) -> Arc<PanelSnapshot> {
+        if self.reload_settings_if_changed() {
+            self.publish();
+        }
         self.request_refresh(false);
         self.cached_snapshot()
     }
@@ -1186,6 +1291,8 @@ impl ColabCoordinator {
             hf_token,
             ledger_error,
             accounts_error,
+            accounts_error_kind,
+            settings_error,
         ) = {
             let state = self.state.lock().unwrap();
             let key = state.active_key();
@@ -1216,12 +1323,27 @@ impl ColabCoordinator {
                     .real_accounts_error
                     .as_ref()
                     .map(|error| error.message.clone()),
+                state
+                    .real_accounts_error
+                    .as_ref()
+                    .map(|error| error.ui_kind().to_owned()),
+                state.settings_error.clone(),
             )
         };
         let tunnel_revision = self.tunnels.revision();
-        let tunnels = self
+        let tunnels: Vec<Value> = self
             .tunnels
-            .list_for(&key.id, key.mode == BackendMode::Mock);
+            .list_for(&key.id, key.mode == BackendMode::Mock)
+            .into_iter()
+            .map(|t| {
+                let mut val = serde_json::to_value(&t).unwrap_or_default();
+                if let TunnelState::Failed { error } = &t.state {
+                    val["state"]["error"]["ui_kind"] = json!(error.ui_kind());
+                    val["state"]["error"]["localized"] = error.localized_json();
+                }
+                val
+            })
+            .collect();
         self.published_tunnels
             .store(tunnel_revision, Ordering::Relaxed);
         let now = now_secs();
@@ -1278,10 +1400,18 @@ impl ColabCoordinator {
             })
             .collect::<Vec<_>>();
         let hardware_rates: BTreeMap<_, _> = Accelerator::ALL.into_iter().map(|acc| {
-            let measured = ledger.hardware_rates.get(&LedgerData::hw_key(acc, false))
-                .or_else(|| ledger.hardware_rates.get(&LedgerData::hw_key(acc, true)))
-                .copied();
-            (acc.as_str(), json!({ "cu_per_hour": measured.unwrap_or_else(|| published_rate(acc, false)), "measured": measured.is_some() }))
+            let measured_std = ledger.hardware_rates.get(&LedgerData::hw_key(acc, false)).copied();
+            let measured_hi = ledger.hardware_rates.get(&LedgerData::hw_key(acc, true)).copied();
+            let measured = measured_std.or(measured_hi);
+            (
+                acc.as_str(),
+                json!({
+                    "cu_per_hour": measured.unwrap_or_else(|| published_rate(acc, false)),
+                    "high_mem_cu_per_hour": measured_hi.unwrap_or_else(|| published_rate(acc, true)),
+                    "measured": measured.is_some(),
+                    "high_mem_measured": measured_hi.is_some(),
+                }),
+            )
         }).collect();
         let mut ended: Vec<_> = ledger
             .sessions
@@ -1292,9 +1422,16 @@ impl ColabCoordinator {
             .collect();
         ended.sort_by_key(|(_, stop)| Reverse(stop.at_secs));
         let ended_sessions: Vec<_> = ended.into_iter().take(10).map(|(row, stop)| {
-            let reason = match stop.reason {
-                StopReason::User => "user",
-                StopReason::Guard { .. } => "guard",
+            let reason = match &stop.reason {
+                StopReason::User => "user_stop",
+                StopReason::Guard { limit, .. } => match limit.to_ascii_lowercase().as_str() {
+                    "spend" => "guard_spend",
+                    "runtime" => "guard_runtime",
+                    "balance" => "guard_balance",
+                    "idle" => "watchdog_idle",
+                    "deadline" => "watchdog_deadline",
+                    _ => "guard_spend",
+                },
                 StopReason::Provision => "provision",
                 StopReason::Vanished => "vanished",
             };
@@ -1309,17 +1446,66 @@ impl ColabCoordinator {
             .iter()
             .filter_map(|account| account.email.clone())
             .collect::<Vec<_>>();
+        let (last_error, last_error_kind, last_error_localized) = if key.mode == BackendMode::Real {
+            if let Some(err) = accounts_error.clone() {
+                let e = Error::new(ErrorKind::AuthRequired, err.clone());
+                let kind = accounts_error_kind.unwrap_or_else(|| e.ui_kind().to_owned());
+                (Some(err), Some(kind), Some(e.localized_json()))
+            } else if let Some(err) = ledger_error.clone() {
+                let e = Error::new(ErrorKind::Io, err.clone());
+                (
+                    Some(err),
+                    Some(e.ui_kind().to_owned()),
+                    Some(e.localized_json()),
+                )
+            } else if let Some(err) = sample.error.clone() {
+                let e = Error::new(ErrorKind::Other, err.clone());
+                let kind = sample
+                    .error_kind
+                    .clone()
+                    .unwrap_or_else(|| e.ui_kind().to_owned());
+                let localized = Error::new(
+                    match kind.as_str() {
+                        "cli_missing" => ErrorKind::NotInstalled,
+                        "auth_expired" | "auth_mismatch" => ErrorKind::AuthRequired,
+                        "quota" => ErrorKind::SessionLimitReached,
+                        "no_gpu" => ErrorKind::CapacityRefused,
+                        "not_found" => ErrorKind::SessionGone,
+                        _ => ErrorKind::Other,
+                    },
+                    sample.error.clone().unwrap_or_default(),
+                )
+                .localized_json();
+                (Some(err), Some(kind), Some(localized))
+            } else {
+                (None, None, None)
+            }
+        } else if let Some(err) = sample.error.clone() {
+            let e = Error::new(ErrorKind::Other, err.clone());
+            let kind = sample
+                .error_kind
+                .clone()
+                .unwrap_or_else(|| e.ui_kind().to_owned());
+            (Some(err), Some(kind), Some(e.localized_json()))
+        } else {
+            (None, None, None)
+        };
         let mut payload = json!({
             "backend_mode": key.mode, "active_account": accounts.active(), "accounts": accounts.accounts,
             "usage": usage, "balance_history": sample.history.points(), "sessions": sessions,
             "hardware_rates": hardware_rates, "ended_sessions": ended_sessions,
-            "sampled_at_epoch": sample.sampled_at, "guard_paused": sample.guard_paused || sample.sampled_at.is_none() || ledger_error.is_some() || (key.mode == BackendMode::Real && accounts_error.is_some()),
+            "sampled_at_epoch": sample.sampled_at,
+            "syncing": sample.sampled_at.is_none(),
+            "guard_paused": sample.guard_paused || sample.sampled_at.is_none() || ledger_error.is_some() || (key.mode == BackendMode::Real && accounts_error.is_some()),
             "pending_stops": pending_stops, "provision_jobs": jobs, "tunnels": tunnels,
             "plugins": plugins.as_ref(), "plugin_runs": runs, "hf_token_set": hf_token.is_some(),
-            "settings": settings, "settings_path": display_path(self.settings_store.path()), "env": sample.env,
+            "settings": settings, "settings_path": display_path(self.settings_store.path()),
+            "settings_error": settings_error, "env": sample.env,
             "ledger_error": ledger_error,
             "accounts_error": accounts_error,
-            "last_error": if key.mode == BackendMode::Real { accounts_error.or(ledger_error).or(sample.error) } else { sample.error },
+            "last_error": last_error,
+            "last_error_kind": last_error_kind,
+            "last_error_localized": last_error_localized,
         });
         let secrets = hf_token.into_iter().collect::<Vec<_>>();
         redact_json(&mut payload, &secrets);
@@ -1349,13 +1535,11 @@ impl ColabCoordinator {
     }
 
     fn record_sample_error(&self, ctx: &AccountContext, error: &Error) {
-        self.state
-            .lock()
-            .unwrap()
-            .samples
-            .entry(ctx.key.clone())
-            .or_default()
-            .error = Some(error.message.clone());
+        let mut state = self.state.lock().unwrap();
+        let entry = state.samples.entry(ctx.key.clone()).or_default();
+        entry.error = Some(error.message.clone());
+        entry.error_kind = Some(error.ui_kind().to_owned());
+        drop(state);
         self.publish();
     }
 
@@ -1667,10 +1851,10 @@ impl ColabCoordinator {
                         endpoint: endpoint.clone(),
                         hardware: spec.accelerator.as_str().into(),
                         accelerator: Some(spec.accelerator),
-                        shape: if spec.high_mem {
-                            "HIGH_RAM"
+                        shape: if spec.high_mem && spec.accelerator.supports_high_mem() {
+                            "High-RAM"
                         } else {
-                            "STANDARD"
+                            "Standard"
                         }
                         .into(),
                         variant: String::new(),
@@ -1775,12 +1959,24 @@ impl ColabCoordinator {
         };
         policy.validate()?;
         let reserve = self.reserve(&context, &spec.name, defaults.max_concurrent_sessions)?;
+        let is_zh = self
+            .state
+            .lock()
+            .unwrap()
+            .settings_for(context.key.mode)
+            .locale
+            == "zh-CN";
         let view = ProvisionJobView {
             job_id: format!("prov-{}", self.next_seq.fetch_add(1, Ordering::Relaxed)),
             name: spec.name.clone(),
             accelerator,
             done: false,
-            last_status: "Starting allocation…".into(),
+            last_status: if is_zh {
+                "正在启动…"
+            } else {
+                "Starting…"
+            }
+            .into(),
             error: None,
         };
         let cancel = CancelToken::new();
@@ -1804,13 +2000,22 @@ impl ColabCoordinator {
                 let _reservation = reserve;
                 let result =
                     coord.allocate(&context, &spec, policy, &defaults, &cancel, &mut |event| {
-                        coord.job_update(&id, format_prov_event(&event), None, false);
+                        coord.job_update(&id, format_prov_event(&event, is_zh), None, false);
                     });
                 match result {
-                    Ok(_) => coord.job_update(&id, format!("Ready ({})", spec.name), None, true),
+                    Ok(_) => coord.job_update(
+                        &id,
+                        if is_zh { "就绪" } else { "Ready" }.into(),
+                        None,
+                        true,
+                    ),
                     Err(e) => coord.job_update(
                         &id,
-                        format!("Failed: {}", e.message),
+                        if is_zh {
+                            e.localized().1
+                        } else {
+                            e.localized().0
+                        },
                         Some(e.message),
                         true,
                     ),
@@ -2628,6 +2833,8 @@ impl ColabCoordinator {
                         .invalidate_credentials(Some(ADC_ACCOUNT_ID));
                 }
                 state.real_settings = real;
+                state.settings_stamp = self.settings_store.stamp();
+                state.settings_error = None;
             }
             if let Some(accounts) = accounts {
                 state.real_accounts = accounts;
@@ -3033,8 +3240,7 @@ impl ColabCoordinator {
                                 state: "running".into(),
                                 stage: None,
                                 progress: None,
-                                message: "Recovered deployment; local tunnels need to be reopened"
-                                    .into(),
+                                message: "Recovered — reopen your local ports.".into(),
                                 outputs: BTreeMap::new(),
                                 log_tail: Vec::new(),
                                 endpoints: Vec::new(),
@@ -3077,7 +3283,7 @@ impl ColabCoordinator {
                 .is_none_or(|deployment| !deployment.runs.contains_key(&run.info.run_id))
             {
                 run.info.state = "stopped".into();
-                run.info.message = "Deployment runtime is no longer active".into();
+                run.info.message = "Session ended.".into();
                 run.cancel.cancel();
                 run.pinned = None;
             }
@@ -3316,7 +3522,7 @@ impl ColabCoordinator {
             state: "running".into(),
             stage: Some("detect".into()),
             progress: Some(0.0),
-            message: "Preparing deployment…".into(),
+            message: "Preparing…".into(),
             outputs: BTreeMap::new(),
             log_tail: Vec::new(),
             endpoints,
@@ -3388,7 +3594,7 @@ impl ColabCoordinator {
                         cancelled = entry.cancel.is_cancelled();
                         if entry.info.state == "running" {
                             entry.info.state = "cancelling".into();
-                            entry.info.message = "Cleaning up failed deployment".into();
+                            entry.info.message = "Cleaning up…".into();
                         }
                     });
                     let cleanup = coord.cleanup_run(run, run.info.created && stop_on_failure);
@@ -3565,6 +3771,7 @@ impl ColabCoordinator {
                 &defaults,
                 cancel,
                 &mut |event| {
+                    let zh = self.state.lock().unwrap().settings.locale == "zh-CN";
                     self.update_run(rid, |r| {
                         if r.info.state == "stopped" {
                             return;
@@ -3573,7 +3780,7 @@ impl ColabCoordinator {
                             r.info.endpoint = Some(endpoint.clone());
                         }
                         if r.info.state == "running" {
-                            r.info.message = format_prov_event(&event);
+                            r.info.message = format_prov_event(&event, zh);
                         }
                     })
                 },
@@ -3674,7 +3881,7 @@ impl ColabCoordinator {
         if !run.info.endpoints.is_empty() {
             self.update_running_run(rid, |r| {
                 r.info.stage = Some("tunnel".into());
-                r.info.message = "Waiting for SSH port forwarding".into();
+                r.info.message = "Waiting for the port…".into();
             });
         }
         self.with_endpoint(&ctx.key, endpoint, || {
@@ -3755,7 +3962,7 @@ impl ColabCoordinator {
                 .is_some_and(|entry| {
                     entry.info.endpoints = run.info.endpoints.clone();
                     entry.info.state = "ready".into();
-                    entry.info.message = "Deployment ready".into();
+                    entry.info.message = "Ready".into();
                     entry.info.progress = Some(1.0);
                     entry.worker_active = false;
                     true
@@ -3899,7 +4106,7 @@ impl ColabCoordinator {
                 return Ok((false, self.cached_snapshot()));
             }
             run.info.state = "cancelling".into();
-            run.info.message = "Stopping deployment…".into();
+            run.info.message = "Stopping…".into();
             run.cancel.cancel();
             let start_cleanup = !run.worker_active;
             run.worker_active = true;
@@ -3921,7 +4128,7 @@ impl ColabCoordinator {
                         match result {
                             Ok(()) => {
                                 entry.info.state = "cancelled".into();
-                                entry.info.message = "Deployment cancelled".into();
+                                entry.info.message = "Cancelled".into();
                                 entry.pinned = None;
                             }
                             Err(error) => {
@@ -4161,23 +4368,34 @@ fn concise_summary(snapshot: &Value) -> String {
     format!("Colab Deck ({mode}, {account}): balance {balance}, burn {rate}, {sessions} active runtime(s), {tunnels} active tunnel(s).")
 }
 
-fn format_prov_event(ev: &ProvisionEvent) -> String {
+fn format_prov_event(ev: &ProvisionEvent, zh: bool) -> String {
     match ev {
-        ProvisionEvent::EndpointRecorded { .. } => "Allocation recorded".into(),
+        ProvisionEvent::EndpointRecorded { .. } | ProvisionEvent::Allocated { .. } => if zh {
+            "正在检查 GPU…"
+        } else {
+            "Checking the GPU…"
+        }
+        .into(),
         ProvisionEvent::Allocating {
             attempt,
             max_attempts,
         } => {
-            format!("Allocating VM (attempt {attempt}/{max_attempts})…")
-        }
-        ProvisionEvent::Allocated { attempt } => {
-            format!("Allocated VM on attempt {attempt}; probing GPU…")
+            if zh {
+                format!("正在申请 GPU（第 {attempt}/{max_attempts} 次）…")
+            } else {
+                format!("Requesting a GPU (try {attempt}/{max_attempts})…")
+            }
         }
         ProvisionEvent::AllocationFailed { attempt, message } => {
-            format!("Attempt {attempt} failed: {message}")
+            if zh {
+                format!("第 {attempt} 次申请失败")
+            } else {
+                format!("Try {attempt} failed: {message}")
+            }
         }
         ProvisionEvent::Probed { gpu, vram_mib, .. } => format!(
-            "Probed {} ({} MiB)",
+            "{} {} ({} MiB)",
+            if zh { "已检测" } else { "Checked" },
             gpu.as_deref().unwrap_or("CPU/TPU"),
             vram_mib.unwrap_or(0)
         ),
@@ -4186,22 +4404,41 @@ fn format_prov_event(ev: &ProvisionEvent) -> String {
             min_vram_mib,
             ..
         } => {
-            format!(
-                "Rejected {} MiB < {min_vram_mib} MiB; releasing…",
-                vram_mib.unwrap_or(0)
-            )
+            let got = vram_mib.unwrap_or(0);
+            if zh {
+                format!("显存 {got} MiB，不够 {min_vram_mib} MiB，正在重试…")
+            } else {
+                format!("Got {got} MiB, need {min_vram_mib} MiB. Trying again…")
+            }
         }
-        ProvisionEvent::Releasing { attempt } => format!("Releasing VM from attempt {attempt}…"),
-        ProvisionEvent::Reconciling { .. } => "Checking for orphan runtimes…".into(),
-        ProvisionEvent::CleanupPending { .. } => "Runtime release pending confirmation".into(),
-        ProvisionEvent::Retrying {
-            attempt,
-            delay_secs,
-        } => {
-            format!("Retrying attempt {attempt} in {delay_secs}s…")
+        ProvisionEvent::Releasing { .. } => if zh {
+            "正在释放…"
+        } else {
+            "Releasing…"
         }
-        ProvisionEvent::Ready { name, .. } => format!("Ready: {name}"),
-        ProvisionEvent::Failed { message } => format!("Failed: {message}"),
+        .into(),
+        ProvisionEvent::Reconciling { .. } => if zh {
+            "正在检查外部会话…"
+        } else {
+            "Checking external sessions…"
+        }
+        .into(),
+        ProvisionEvent::CleanupPending { .. } => if zh { "正在停止…" } else { "Stopping…" }.into(),
+        ProvisionEvent::Retrying { delay_secs, .. } => {
+            if zh {
+                format!("{delay_secs} 秒后重试…")
+            } else {
+                format!("Retrying in {delay_secs}s…")
+            }
+        }
+        ProvisionEvent::Ready { .. } => if zh { "就绪" } else { "Ready" }.into(),
+        ProvisionEvent::Failed { message } => {
+            if zh {
+                "启动失败".into()
+            } else {
+                format!("Failed: {message}")
+            }
+        }
     }
 }
 
@@ -4659,7 +4896,9 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while !coord.snapshot_json(None)["provision_jobs"][0]["last_status"]
             .as_str()
-            .is_some_and(|status| status.contains("probing GPU"))
+            .is_some_and(|status| {
+                status.contains("Checking the GPU") || status.contains("正在检查 GPU")
+            })
         {
             assert!(
                 Instant::now() < deadline,
@@ -4818,6 +5057,25 @@ mod tests {
         let store = AccountStore::new(root.path());
         assert!(store.save(&AccountRegistry::default_with_adc()).is_err());
         assert_eq!(std::fs::read(path).unwrap(), b"{incomplete");
+        coord.shutdown();
+    }
+
+    #[test]
+    fn corrupt_settings_on_startup_stays_intact_and_surfaces_settings_error() {
+        let root = PrivateDir::new(&std::env::temp_dir(), "settings-startup-corrupt").unwrap();
+        let path = root.path().join("settings.json");
+        std::fs::write(&path, b"{not-valid-json").unwrap();
+        let coord =
+            ColabCoordinator::with_host(root.path().to_owned(), Some(false), Host::denied());
+        let snap = coord.snapshot_json(None);
+        assert_eq!(snap["settings_error"], "cannot parse settings.json");
+        assert_eq!(snap["settings"]["defaults"]["accelerator"], "G4");
+        assert_eq!(std::fs::read(&path).unwrap(), b"{not-valid-json");
+        assert!(!path.with_extension("json.corrupt").exists());
+        assert!(coord
+            .update_settings(serde_json::from_value(json!({"locale":"en"})).unwrap())
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{not-valid-json");
         coord.shutdown();
     }
 

@@ -13,7 +13,7 @@
 - VM worker downloads verify archive bounds and integrity before execution.
 
 ## Zero-Billing Test Guarantee
-- `Host::run` and real subprocess/network spawners enforce compile-time `#[cfg(test)]` refusals alongside integration-test executor guards so `cargo test` can never spawn real `colab`/`ssh`/`git`/`curl` or consume Compute Units.
+- `Host::run` and real subprocess/network spawners enforce compile-time test-mode refusals alongside integration-test executor guards so `cargo test` can never spawn real `colab`/`ssh`/`git`/`curl` or consume Compute Units.
 
 ## Supported versions
 

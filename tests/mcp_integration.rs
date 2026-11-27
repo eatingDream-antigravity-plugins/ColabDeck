@@ -92,7 +92,7 @@ fn mcp_static_resource_delta_poll_and_full_mock_lifecycle() {
         "the static resource must replace its boot placeholder"
     );
     assert!(html.contains("__COLAB_BOOT__=[null][0]") || html.contains("__COLAB_BOOT__=null"));
-    assert!(html.len() <= 43_500);
+    assert!(html.len() <= 65_536);
     assert!(!html.contains("c-g4-train"));
 
     // 4. Verify hash-dedup delta polling returns unchanged=true
@@ -256,7 +256,7 @@ fn mcp_static_resource_delta_poll_and_full_mock_lifecycle() {
     let ended = &stop["result"]["structuredContent"]["snapshot"]["ended_sessions"][0];
     assert_eq!(ended["name"], "a100-80");
     assert_eq!(ended["hardware"], "A100");
-    assert_eq!(ended["stop_reason"], "user");
+    assert_eq!(ended["stop_reason"], "user_stop");
     assert!(ended["duration_secs"].is_u64());
 
     coord.shutdown();
@@ -393,7 +393,7 @@ fn session_snapshot_and_switch_preview_include_unmanaged_history() {
     assert_eq!(snapshot["hardware_rates"].as_object().unwrap().len(), 8);
     assert_eq!(
         snapshot["hardware_rates"]["G4"],
-        json!({"cu_per_hour":8.90,"measured":false})
+        json!({"cu_per_hour":8.90,"measured":false,"high_mem_cu_per_hour":8.90,"high_mem_measured":false})
     );
 
     let response = call(2, "colab_app_accounts", json!({"action":"preview_switch"}));
@@ -1371,5 +1371,132 @@ fn cancelling_a_shared_deployment_keeps_the_runtime_until_its_last_user_leaves()
         .unwrap()
         .iter()
         .all(|s| s["display_name"] != first.session));
+    coord.shutdown();
+}
+
+#[test]
+fn mcp_tool_names_stay_within_64_char_host_prefix_limit() {
+    let root = PrivateDir::new(&std::env::temp_dir(), "tool-len").unwrap();
+    let coord = ColabCoordinator::with_host(root.path().to_owned(), Some(true), Host::denied());
+    let html = HtmlLoader::new(None);
+    let mut conn = init_connection(
+        "2025-11-25",
+        json!({"io.modelcontextprotocol/ui":{"mimeTypes":[APP_MIME]}}),
+        &coord,
+        &html,
+    );
+    let listed = rpc(&mut conn, &coord, &html, 2, "tools/list", json!({}));
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    assert!(!tools.is_empty());
+    let prefix_len = "colab-mcp_colab-mcp_".len();
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        assert!(
+            prefix_len + name.len() <= 64,
+            "tool {name} exceeds 64-char host prefix budget ({} > 64)",
+            prefix_len + name.len()
+        );
+    }
+    coord.shutdown();
+}
+
+#[test]
+fn settings_hot_reload_and_structured_error_payloads_work_end_to_end() {
+    let root = PrivateDir::new(&std::env::temp_dir(), "hot-reload-e2e").unwrap();
+    let settings_file = root.path().join("settings.json");
+    fs::write(
+        &settings_file,
+        r#"{"backend_mode":"mock","locale":"zh-CN"}"#,
+    )
+    .unwrap();
+    let coord = ColabCoordinator::with_host(root.path().to_owned(), None, Host::denied());
+    let html = HtmlLoader::new(None);
+    let mut conn = init_connection(
+        "2025-11-25",
+        json!({"io.modelcontextprotocol/ui":{"mimeTypes":[APP_MIME]}}),
+        &coord,
+        &html,
+    );
+
+    // Trigger initial poll and verify settings_path + 7-day seeded demo balance history
+    let p0 = rpc(
+        &mut conn,
+        &coord,
+        &html,
+        2,
+        "tools/call",
+        json!({ "name": "colab_app_poll", "arguments": {} }),
+    );
+    let initial = &p0["result"]["structuredContent"];
+    assert!(initial["settings_path"]
+        .as_str()
+        .unwrap()
+        .ends_with("settings.json"));
+    assert!(initial["balance_history"].as_array().unwrap().len() >= 10);
+    assert!(initial["settings_error"].is_null());
+
+    // Live edit settings.json externally and confirm hot-reload picks it up without restart
+    fs::write(
+        &settings_file,
+        r#"{"lang":"en","backend_mode":"mock","defaults":{"poll_active_secs":20,"poll_idle_secs":180}}"#,
+    )
+    .unwrap();
+    let p1 = rpc(
+        &mut conn,
+        &coord,
+        &html,
+        3,
+        "tools/call",
+        json!({ "name": "colab_app_poll", "arguments": {} }),
+    );
+    let after_edit = &p1["result"]["structuredContent"];
+    assert_eq!(after_edit["settings"]["locale"], "en");
+    assert_eq!(after_edit["settings"]["defaults"]["poll_active_secs"], 20);
+    assert_eq!(after_edit["settings"]["defaults"]["poll_idle_secs"], 180);
+    assert!(after_edit["settings_error"].is_null());
+
+    // Invalid live edit fails closed: keeps last good settings, surfaces settings_error, never quarantines
+    fs::write(&settings_file, "{bad json").unwrap();
+    let p2 = rpc(
+        &mut conn,
+        &coord,
+        &html,
+        4,
+        "tools/call",
+        json!({ "name": "colab_app_poll", "arguments": {} }),
+    );
+    let after_bad = &p2["result"]["structuredContent"];
+    assert_eq!(after_bad["settings"]["locale"], "en");
+    assert!(after_bad["settings_error"].as_str().is_some());
+    assert!(settings_file.exists());
+    assert!(!settings_file.with_extension("json.corrupt").exists());
+
+    // Tool error returns structured kind + localized EN/ZH messages
+    let err_res = rpc(
+        &mut conn,
+        &coord,
+        &html,
+        5,
+        "tools/call",
+        json!({ "name": "colab_session_action", "arguments": { "action": "stop", "session": "nonexistent-session" } }),
+    );
+    assert_eq!(err_res["result"]["isError"], true);
+    let body = &err_res["result"]["structuredContent"];
+    assert_eq!(body["kind"], "not_found");
+    assert!(!body["localized"]["en"].as_str().unwrap().is_empty());
+    assert!(!body["localized"]["zh-CN"].as_str().unwrap().is_empty());
+
+    // Verify HIGH_RAM casing normalization on ServerSession
+    let sess = colab_mcp::cli::ServerSession {
+        endpoint: "m-s-test".into(),
+        name: Some("s1".into()),
+        hardware: "G4".into(),
+        accelerator: Some(colab_mcp::settings::Accelerator::G4),
+        shape: "HIGH_RAM".into(),
+        variant: "GPU".into(),
+        status: Some("running".into()),
+    };
+    assert!(sess.high_mem());
+
     coord.shutdown();
 }

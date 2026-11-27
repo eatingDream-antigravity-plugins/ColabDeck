@@ -268,6 +268,9 @@ fn build_tool_registry() -> Value {
                     "required": ["action"],
                     "properties": {
                         "action": { "type": "string", "enum": ["open", "close", "dismiss", "list"] },
+                        "expected_backend_mode": { "type": ["string", "null"], "enum": ["real", "mock", null] },
+                        "account_id": { "type": ["string", "null"] },
+                        "endpoint": { "type": ["string", "null"] },
                         "session": { "type": "string" },
                         "local_port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
                         "remote_port": { "type": "integer", "minimum": 1, "maximum": 65535, "not": { "const": RESERVED_VM_PORT } },
@@ -503,10 +506,19 @@ fn ok_result(text: String, structured: Value) -> Value {
 }
 
 pub(crate) fn err_result(msg: impl Into<String>) -> Value {
-    let m = msg.into();
+    let err = Error::new(crate::error::ErrorKind::Other, msg.into());
+    err_from(&err)
+}
+
+pub(crate) fn err_from(error: &Error) -> Value {
+    let m = error.message.clone();
     json!({
         "content": [{ "type": "text", "text": m }],
-        "structuredContent": { "error": m },
+        "structuredContent": {
+            "error": m,
+            "kind": error.ui_kind(),
+            "localized": error.localized_json(),
+        },
         "isError": true
     })
 }
@@ -536,7 +548,7 @@ fn stop_result(
             (format!("{} {}", pending(), error.message), false, None)
         }
         Err(error) => {
-            let mut output = err_result(error.message);
+            let mut output = err_from(&error);
             if let Some(warning) = error.context.get("ledger_warning") {
                 output["structuredContent"]["ledger_warning"] = warning.clone();
             }
@@ -610,14 +622,14 @@ pub(crate) fn call_tool_json(
     } else {
         match pin_tool_context(name, args, coord).transpose() {
             Ok(context) => context,
-            Err(error) => return err_result(error.message),
+            Err(error) => return err_from(&error),
         }
     };
     if let Some(context) = &context {
         if let Err(error) =
             coord.verify_action_context(context, expected_mode(args), args["account_id"].as_str())
         {
-            return err_result(error.message);
+            return err_from(&error);
         }
     }
     let account = || {
@@ -644,7 +656,7 @@ pub(crate) fn call_tool_json(
             let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
             if force {
                 if let Err(error) = coord.refresh(true) {
-                    return err_result(error.message);
+                    return err_from(&error);
                 }
             }
             let snapshot = if name == "colab_panel" && args["refresh"] == true {
@@ -691,7 +703,7 @@ pub(crate) fn call_tool_json(
                             format!("Provisioning {} ({:?})", job.name, job.accelerator),
                             json!({ "job": job, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "cancel_provision" => {
@@ -702,7 +714,7 @@ pub(crate) fn call_tool_json(
                         args["account_id"].as_str(),
                     ) {
                         Ok(cancelled) => cancelled,
-                        Err(error) => return err_result(error.message),
+                        Err(error) => return err_from(&error),
                     };
                     ok_result(
                         format!("cancel_provision({jid}) = {cancelled}"),
@@ -734,14 +746,14 @@ pub(crate) fn call_tool_json(
                             format!("Restarted kernel on {sess}"),
                             json!({ "ok": true, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "url" => {
                     let sess = session();
                     match account().and_then(|ctx| coord.session_url_in(ctx, sess)) {
                         Ok(url) => ok_result(url.clone(), json!({ "url": url })),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 _ => err_result(format!("unknown session action {action:?}")),
@@ -775,7 +787,7 @@ pub(crate) fn call_tool_json(
                             ),
                             json!({ "tunnel": info, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "close" => {
@@ -836,7 +848,7 @@ pub(crate) fn call_tool_json(
                             format!("Switched to {}", reg.active_id),
                             json!({ "accounts": reg, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "add" => {
@@ -870,7 +882,7 @@ pub(crate) fn call_tool_json(
                             "Account saved".into(),
                             json!({ "accounts": reg, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "remove" => {
@@ -883,7 +895,7 @@ pub(crate) fn call_tool_json(
                             format!("Removed {id}"),
                             json!({ "accounts": reg, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "set_hf_token" => {
@@ -909,7 +921,7 @@ pub(crate) fn call_tool_json(
                     Ok(env) => {
                         ok_result("ok".into(), json!({ "env": env, "snapshot": snapshot() }))
                     }
-                    Err(error) => err_result(error.message),
+                    Err(error) => err_from(&error),
                 },
                 "update" => {
                     let patch_val = args.get("patch").cloned().unwrap_or_else(|| json!({}));
@@ -919,7 +931,7 @@ pub(crate) fn call_tool_json(
                                 "Settings saved".into(),
                                 json!({ "settings": s, "snapshot": snapshot() }),
                             ),
-                            Err(e) => err_result(e.message),
+                            Err(e) => err_from(&e),
                         },
                         Err(e) => err_result(format!("invalid settings patch: {e}")),
                     }
@@ -941,7 +953,7 @@ pub(crate) fn call_tool_json(
                             format!("Found {} GGUF repo(s)", models.len()),
                             json!({ "models": models }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "inspect_hf" => {
@@ -952,7 +964,7 @@ pub(crate) fn call_tool_json(
                             format!("VRAM fit computed for {repo}"),
                             json!({ "repo": repo, "accelerator": acc, "fits": fits, "listing": listing }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "install_dir" => {
@@ -962,7 +974,7 @@ pub(crate) fn call_tool_json(
                             format!("Installed plugin {}", plg.manifest.id),
                             json!({ "plugin": plg, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "install_git" => {
@@ -972,7 +984,7 @@ pub(crate) fn call_tool_json(
                             format!("Installed plugin {} from git", plg.manifest.id),
                             json!({ "plugin": plg, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "remove" => {
@@ -982,7 +994,7 @@ pub(crate) fn call_tool_json(
                             format!("Removed {id} ({rm})"),
                             json!({ "removed": rm, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "deploy" => {
@@ -1011,7 +1023,7 @@ pub(crate) fn call_tool_json(
                             ),
                             json!({ "run": run, "snapshot": snapshot() }),
                         ),
-                        Err(e) => err_result(e.message),
+                        Err(e) => err_from(&e),
                     }
                 }
                 "cancel_run" | "cancel" => {
@@ -1022,7 +1034,7 @@ pub(crate) fn call_tool_json(
                         args["account_id"].as_str(),
                     ) {
                         Ok(result) => result,
-                        Err(error) => return err_result(error.message),
+                        Err(error) => return err_from(&error),
                     };
                     ok_result(
                         if ok {

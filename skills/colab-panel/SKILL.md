@@ -49,4 +49,11 @@ The host must negotiate MCP Apps before these tools are available.
 
 Before switching accounts, call `preview_switch`. It returns `open_tunnels` and `active_sessions` counts. Read `closing_tunnels` for forwards that close. Read `watched_sessions` for managed runtimes with enforced VM auto-stop. `remaining_secs` is null for an idle-only watchdog. Read `unwatched_sessions` for managed runtimes without enforced VM auto-stop and `orphan_sessions` for `[?]` runtimes with any recovered `external_name`.
 
+## Configuration (`settings.json`)
+
+- **File path**: `~/.gemini/antigravity/plugin_data/colab-mcp/settings.json` (respects `--data-dir` / `COLAB_MCP_DATA_DIR`).
+- **Hot-reload**: File changes (`mtime`, size, or inode) are reloaded automatically on the next tick or poll without restarting Antigravity. Invalid JSON keeps the last valid settings in memory and reports `settings_error` without overwriting the file.
+- **GUI-managed keys**: `locale` (`"en"` | `"zh-CN"`, alias `"lang"`), `backend_mode` (`"real"` | `"mock"`), `defaults.accelerator`, `defaults.max_concurrent_sessions` (`1..8`), `defaults.guard.{max_runtime_secs, idle_timeout_secs, max_spend_cu, min_balance_cu}`, `defaults.poll_active_secs` (`10..600`, default `30`), and `defaults.poll_idle_secs` (`30..3600`, default `300`).
+- **Advanced JSON-only keys**: `auth_mode`, `defaults.{high_mem, min_vram_mib, max_attempts, retry_delay_secs, watchdog_grace_secs}` (see `docs/ai-guide.md`).
+
 Use `colab-mcp serve --mock` to test with zero billing.

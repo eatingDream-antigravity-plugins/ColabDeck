@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.2.2...v0.2.3) (2026-11-27)
+
+
+### Bug Fixes
+
+* **panel:** replace raw [?] placeholder badges with clear CLI and Browser labels ([#10](https://github.com/eatingDream-antigravity-plugins/colab-deck/issues/10)) ([0c0bcf6](https://github.com/eatingDream-antigravity-plugins/colab-deck/commit/0c0bcf6678e1be37b1f39b133549e8096b541758))
+
 ## [0.2.2](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.2.1...v0.2.2) (2026-11-27)
 
 

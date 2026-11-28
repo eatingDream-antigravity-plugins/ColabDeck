@@ -620,6 +620,8 @@ const setv = (() => {
 })();
 
 function renderHeader(): void {
+  DC.getElementById("bf")?.remove();
+  const ap = DC.getElementById("ap"); if (ap) ap.hidden = false;
   const s = snap, mock = s?.backend_mode === "mock", ss = s?.sessions || [], ps = isPs(s), aa = actA(), ab = $("ab");
   A(DC.documentElement, "lang", lang); D($("app"), "ps", ps ? "1" : "0");
   for (const [n, k, a] of I18) if (a) A(n, a, t(k)); else L(n, k);
@@ -739,7 +741,15 @@ ON(DC, "click", async (ev) => {
   }
 });
 
-ON(DC, "visibilitychange", () => { if (DC.hidden) { if (pollT !== null) { CT(pollT); pollT = null; } } else if ((connOk || down) && auto && emb()) void poll(false); });
+ON(DC, "visibilitychange", () => {
+  if (DC.hidden) { if (pollT !== null) { CT(pollT); pollT = null; } }
+  else if ((connOk || down) && auto && emb()) {
+    failCount = 0; down = false; ewmaRttMs = 0;
+    delayMs = (snap?.sessions?.length || 0) > 0 ? 4e3 : 12e3;
+    if (pollT !== null) { CT(pollT); pollT = null; }
+    void poll(true);
+  }
+});
 bridge.ontoolresult = (res) => onSnap(parseR(res as McpToolResult), epoch);
 const bootSnap = (window as Window & { __COLAB_BOOT__?: Snap }).__COLAB_BOOT__;
 const bootPick = selectBootHydration(bootSnap, readCachedSnap<Snap>(getStorage()));

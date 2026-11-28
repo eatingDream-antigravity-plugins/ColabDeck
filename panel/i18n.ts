@@ -21,7 +21,7 @@ uk|Unknown|未知
 sl|Not current|数据未更新
 bz|Idle · not billing|空闲 · 不计费
 ot|External|外部会话
-od|Started outside Colab Deck and still billing:|以下会话不是在这里启动的，仍在计费：
+od|Started outside Colab Deck and still billing:|以下会话在 Colab Deck 外部启动，仍在持续计费：
 qa|Quick actions|快捷操作
 ng|New GPU|新建 GPU
 dg|Deploy model|部署模型
@@ -29,7 +29,7 @@ ns|New session|新建会话
 ac|Hardware|硬件
 hm|High-RAM|高内存
 std|Standard|标准
-mv|Min GPU memory (MiB)|最低显存（MiB）
+mv|Min GPU memory (MiB)|最低 GPU 显存（MiB）
 mr|Stop after (hours)|最长运行（小时）
 im|Stop when idle (min)|闲置停止（分钟）
 ms|Spend limit (CU)|花费上限（CU）
@@ -63,7 +63,7 @@ ou|Open|打开
 not|No open ports.|暂无端口转发。
 sr|Search|搜索
 in|Check fit|检查显存
-ht|HF token (kept in memory only)|HF Token（只存在内存里）
+ht|HF token (kept in memory only)|HF Token（仅驻留内存）
 st|Use|使用
 dp|Deploy|开始部署
 stp|Stop|停止
@@ -78,7 +78,7 @@ sw|Switch|切换
 cfs|Confirm switch|确认切换
 sww|Switching closes your open ports. Sessions on the old account keep their auto-stop.|切换会关闭已开的端口，原账号的会话仍会按时自动停止。
 aa|Add account|添加账号
-df|Defaults|默认设置
+df|Preferences|偏好
 mc|Max sessions at once|最多同时运行
 ss|Save|保存
 dc|Environment|环境检查
@@ -96,7 +96,7 @@ ry|Retry|重试
 dt|Details|详情
 rf|Refresh|刷新
 bt|Balance over time|余额走势
-p1|A100 comes in 40 GB and 80 GB. For 80 GB, set min GPU memory to 70000.|A100 有 40G 和 80G 两种；要 80G，请把最低显存设为 70000。
+p1|A100 comes in 40 GB and 80 GB. For 80 GB, set min GPU memory to 70000.|A100 分为 40 GB 与 80 GB；如需 80 GB，请将最低 GPU 显存设为 70000 MiB。
 pd|Auto-stop is on by default.|默认开启自动停止。
 se|Session|会话
 hs|HF token set|已设置 HF Token
@@ -139,7 +139,7 @@ eu|Unnamed Colab session|未命名 Colab 会话
 ep|External session · {hw}|外部会话 · {hw}
 wn|{n} with auto-stop|{n} 个已设自动停止
 vn|{a}/{n} auto-stop|{a}/{n} 自动停止
-om|Out of GPU memory|显存不足
+om|Out of GPU memory|GPU 显存不足
 gs|Google sign-in|Google 登录
 gd|Google (default)|Google（默认）
 ud|Updated {t}|更新于 {t}
@@ -155,7 +155,7 @@ c3|24h|1天
 c4|7d|7天
 c5|All|全部
 cn|Now|现在
-ce|Not enough data in this range.|该时段采样不足。
+ce|Not enough data in this range.|该时段数据不足。
 wr|Run time {c} of {t}|运行时长 {c} / {t}
 ws|Spent {c} of {t} CU|已花费 {c} / {t} CU
 wb|Balance {c} CU (keep {t})|余额 {c} CU（最低 {t}）
@@ -180,12 +180,12 @@ s.watchdog_idle|Idle too long|闲置过久
 s.watchdog_deadline|Auto-stop time reached|到点自动停止
 s.provision|Couldn't start|启动失败
 s.vanished|Ended outside Colab Deck|已在外部结束
-e.cli_error|Colab CLI returned an error.|Colab CLI 出错了。
+e.cli_error|Colab CLI returned an error.|Colab CLI 返回错误。
 e.bridge_closed|Lost connection to Antigravity.|与 Antigravity 的连接已断开。
 e.bridge_timeout|Antigravity didn't respond. Try again.|Antigravity 没有响应，请重试。
-e.bridge_init|Couldn't start the panel. Reopen it.|面板没能启动，请重新打开。
+e.bridge_init|Couldn't start the panel. Reopen it.|面板启动失败，请重新打开。
 e.bridge_no_tools|This panel can't run actions here.|当前环境不支持面板操作。
-e.bridge_rpc|Something went wrong. Try again.|出了点问题，请重试。`;
+e.bridge_rpc|Something went wrong. Try again.|操作失败，请重试。`;
 
 export type Locale = "en" | "zh-CN";
 

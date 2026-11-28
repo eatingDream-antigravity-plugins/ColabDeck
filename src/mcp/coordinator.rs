@@ -1288,11 +1288,38 @@ impl ColabCoordinator {
     }
 
     pub fn panel_snapshot(self: &Arc<Self>) -> Arc<PanelSnapshot> {
-        if self.reload_settings_if_changed() {
+        self.panel_snapshot_with_force(false)
+    }
+
+    pub fn panel_snapshot_fresh(self: &Arc<Self>) -> Arc<PanelSnapshot> {
+        self.panel_snapshot_with_force(true)
+    }
+
+    fn panel_snapshot_with_force(self: &Arc<Self>, force: bool) -> Arc<PanelSnapshot> {
+        let mut changed = self.reload_settings_if_changed();
+        let real_guard_enabled = self.state.lock().unwrap().real_guard_enabled;
+        if real_guard_enabled && self.reload_real_ledger() {
+            changed = true;
+        }
+        if changed {
             self.publish();
         }
-        self.request_refresh(false);
+        self.request_refresh(force);
         self.cached_snapshot()
+    }
+
+    #[cfg(not(test))]
+    pub fn keep_fresh_tick(self: &Arc<Self>, max_age: Duration) {
+        let state = self.state.lock().unwrap();
+        let key = state.active_key();
+        let stale = state
+            .samples
+            .get(&key)
+            .and_then(|sample| sample.attempted)
+            .is_none_or(|at| at.elapsed() >= max_age);
+        if stale {
+            self.schedule_locked(state, key, true);
+        }
     }
 
     pub(crate) fn request_refresh(&self, force: bool) {

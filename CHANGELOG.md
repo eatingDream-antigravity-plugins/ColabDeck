@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.3.0...v0.3.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **security:** harden git remote install, private dirs, and bounded reads ([#16](https://github.com/eatingDream-antigravity-plugins/colab-deck/issues/16)) ([37517fe](https://github.com/eatingDream-antigravity-plugins/colab-deck/commit/37517fe35da707b2c92fa43ce42550afd4315552))
+
 ## [0.3.0](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.2.3...v0.3.0) (2026-11-27)
 
 

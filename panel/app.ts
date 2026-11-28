@@ -210,6 +210,7 @@ interface HardwareRate {
 interface Snap {
   rev: number;
   bootTs?: number;
+  partial?: boolean;
   unchanged?: boolean;
   syncing?: boolean;
   backend_mode?: string;
@@ -664,7 +665,7 @@ async function poll(force = false): Promise<void> {
   if ((!force && busy) || !emb() || (!force && DC.hidden)) return;
   const seq = ++pollSeq; busy = true; $("sw").classList.add("on"); const t0 = nowMs(), epk = epoch;
   try {
-    const p = await rpc(CM("app_poll"), { since_rev: (force || snapFromCache) ? null : (snap?.rev ?? null), force });
+    const p = await rpc(CM("app_poll"), { since_rev: (force || snapFromCache || !!snap?.partial) ? null : (snap?.rev ?? null), force });
     if (seq !== pollSeq) return;
     ewmaRttMs = updateEwmaRtt(ewmaRttMs, nowMs() - t0, +(p?.server_ms ?? 0) || 0).ewmaRttMs;
     const wasDown = down; failCount = 0; down = false; lastSync = Date.now();

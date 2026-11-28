@@ -108,6 +108,10 @@ impl HtmlLoader {
         }
     }
 
+    pub fn is_embedded(&self) -> bool {
+        self.path.is_none()
+    }
+
     pub fn load(&self) -> Result<Arc<CompiledTemplate>, String> {
         let Some(path) = &self.path else {
             return Ok(self.embedded.clone());
@@ -212,6 +216,7 @@ fn build_ssr_boot_json(
         obj.remove("hf_token");
         obj.insert("bootTs".into(), json!(now_millis()));
     }
+    let mut trimmed = false;
     let mut encoded = serialize_boot_json(&snap)?;
     for keep in [64usize, 16, 0] {
         if encoded.len() <= max_boot_bytes {
@@ -224,6 +229,10 @@ fn build_ssr_boot_json(
             if arr.len() > keep {
                 let drop_n = arr.len() - keep;
                 arr.drain(..drop_n);
+                trimmed = true;
+                if let Some(obj) = snap.as_object_mut() {
+                    obj.insert("partial".into(), json!(true));
+                }
                 encoded = serialize_boot_json(&snap)?;
             }
         }
@@ -234,6 +243,10 @@ fn build_ssr_boot_json(
                 if let Some(obj) = run.as_object_mut() {
                     obj.insert("log_tail".into(), json!([]));
                 }
+            }
+            trimmed = true;
+            if let Some(obj) = snap.as_object_mut() {
+                obj.insert("partial".into(), json!(true));
             }
             encoded = serialize_boot_json(&snap)?;
         }
@@ -252,8 +265,19 @@ fn build_ssr_boot_json(
                         json!([])
                     },
                 );
+                trimmed = true;
+                obj.insert("partial".into(), json!(true));
                 encoded = serialize_boot_json(&snap)?;
             }
+        }
+    }
+    if trimmed && encoded.len() > max_boot_bytes {
+        if let Some(arr) = snap
+            .get_mut("balance_history")
+            .and_then(Value::as_array_mut)
+        {
+            arr.clear();
+            encoded = serialize_boot_json(&snap)?;
         }
     }
     if encoded.len() > max_boot_bytes {

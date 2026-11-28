@@ -17,12 +17,13 @@ export interface BootSnapShape {
   rev?: number;
   bootTs?: number;
   syncing?: boolean;
+  partial?: boolean;
 }
 
 export function compactSnapForCache<T extends object>(snap: T): T {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(snap)) {
-    if (k === "hf_token" || k === "snapshot" || k === "unchanged" || k === "server_ms" || k === "bootTs") continue;
+    if (k === "hf_token" || k === "snapshot" || k === "unchanged" || k === "server_ms" || k === "bootTs" || k === "partial") continue;
     out[k] = k === "balance_history" && Array.isArray(v) ? v.slice(-MAX_CACHE_HISTORY) : v;
   }
   return out as T;

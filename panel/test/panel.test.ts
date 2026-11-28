@@ -176,6 +176,7 @@ test("packed panel.html passes Panel Kit Lucid Indigo invariants and security/UX
   assert.ok(html.includes("max-width:640px"), "2x2 KPI breakpoint must be 640px");
   assert.ok(appSrc.includes("pollSeq"), "app.ts must drop stale replies with monotonic pollSeq");
   assert.ok(appSrc.includes("snapFromCache"), "app.ts must clear snapFromCache on live poll");
+  assert.ok(appSrc.includes("snap?.partial"), "app.ts must force full poll when SSR boot was trimmed");
 });
 
 test("localStorage SWR hydration compacts history, strips hf_token, and overrides stale SSR boot", () => {

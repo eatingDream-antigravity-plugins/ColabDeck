@@ -217,7 +217,10 @@ impl Connection {
 }
 
 impl Request {
-    fn fast(&self) -> bool {
+    fn fast(&self, html: &HtmlLoader) -> bool {
+        if self.method == "resources/read" {
+            return html.is_embedded();
+        }
         if self.method != "tools/call" {
             return true;
         }
@@ -506,7 +509,7 @@ fn dispatch(
         match item {
             Dispatch::Reply(reply) => deliver(reply),
             Dispatch::Ignore => {}
-            Dispatch::Execute(req) if req.fast() => {
+            Dispatch::Execute(req) if req.fast(html) => {
                 deliver(req.pin_account(coord).run(coord, html))
             }
             Dispatch::Execute(req) => {

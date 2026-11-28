@@ -1738,5 +1738,36 @@ fn ssr_boot_redaction_escaping_size_budget_and_warm_read_latency() {
         "warm resources/read took {:?} (expected <2ms)",
         elapsed
     );
+
+    // Override template with tight budget trims balance_history and marks partial: true
+    let tight_path = dir.path().join("tight.html");
+    let pad = "x".repeat(61_000);
+    fs::write(
+        &tight_path,
+        format!("<script>window.__COLAB_BOOT__=[/*__COLAB_MCP_BOOT__*/][0];</script><!--{pad}-->"),
+    )
+    .unwrap();
+    let tight_loader = HtmlLoader::new(Some(tight_path));
+    assert!(!tight_loader.is_embedded());
+    let mut tight_conn = init_connection(
+        "2025-11-25",
+        json!({"io.modelcontextprotocol/ui":{"mimeTypes":[APP_MIME]}}),
+        &coord,
+        &tight_loader,
+    );
+    let tight_res = rpc(
+        &mut tight_conn,
+        &coord,
+        &tight_loader,
+        4,
+        "resources/read",
+        json!({ "uri": APP_URI }),
+    );
+    let tight_html = tight_res["result"]["contents"][0]["text"].as_str().unwrap();
+    assert!(tight_html.len() <= 65_536);
+    let (_, after) = tight_html.split_once("window.__COLAB_BOOT__=[").unwrap();
+    let (tight_raw, _) = after.split_once("][0];").unwrap();
+    let tight_boot: Value = serde_json::from_str(tight_raw).unwrap();
+    assert_eq!(tight_boot["partial"], true);
     coord.shutdown();
 }

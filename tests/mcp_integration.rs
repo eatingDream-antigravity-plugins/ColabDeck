@@ -77,7 +77,7 @@ fn mcp_static_resource_delta_poll_and_full_mock_lifecycle() {
         .count();
     assert_eq!(app_only_count, 5);
 
-    // 3. The fixed resource URI returns a static bundle without account state.
+    // 3. The UI resource URI injects a redacted SSR boot payload <= 64 KiB.
     let res = rpc(
         &mut connection,
         &coord,
@@ -91,11 +91,20 @@ fn mcp_static_resource_delta_poll_and_full_mock_lifecycle() {
         !html.contains("/*__COLAB_MCP_BOOT__*/"),
         "the static resource must replace its boot placeholder"
     );
-    assert!(html.contains("__COLAB_BOOT__=[null][0]") || html.contains("__COLAB_BOOT__=null"));
     assert!(html.len() <= 65_536);
-    assert!(!html.contains("c-g4-train"));
+    let (_, after_boot) = html
+        .split_once("window.__COLAB_BOOT__=[")
+        .expect("SSR boot prefix");
+    let (boot_raw, _) = after_boot.split_once("][0];").expect("SSR boot suffix");
+    let boot: Value = serde_json::from_str(boot_raw).expect("valid SSR boot JSON");
+    assert!(boot["bootTs"].as_u64().is_some());
+    assert!(boot["rev"].as_u64().is_some());
+    assert!(boot["settings"].is_object());
+    assert!(boot["accounts"].is_array());
+    assert!(boot["tunnels"].is_array());
+    assert!(boot.get("hf_token").is_none());
 
-    // 4. Verify hash-dedup delta polling returns unchanged=true
+    // 4. Verify rev/hash-dedup delta polling returns unchanged=true
     let p1 = rpc(
         &mut connection,
         &coord,
@@ -105,6 +114,7 @@ fn mcp_static_resource_delta_poll_and_full_mock_lifecycle() {
         json!({ "name": "colab_app_poll", "arguments": {} }),
     );
     let rev = p1["result"]["structuredContent"]["rev"].as_u64().unwrap();
+    let hash = p1["result"]["structuredContent"]["hash"].as_str().unwrap();
     let p2 = rpc(
         &mut connection,
         &coord,
@@ -114,6 +124,23 @@ fn mcp_static_resource_delta_poll_and_full_mock_lifecycle() {
         json!({ "name": "colab_app_poll", "arguments": { "since_rev": rev } }),
     );
     assert_eq!(p2["result"]["structuredContent"]["unchanged"], true);
+    let p2_hash = rpc(
+        &mut connection,
+        &coord,
+        &loader,
+        50,
+        "tools/call",
+        json!({ "name": "colab_app_poll", "arguments": { "if_hash": hash } }),
+    );
+    assert_eq!(p2_hash["result"]["structuredContent"]["unchanged"], true);
+    assert_eq!(p2_hash["result"]["structuredContent"]["hash"], hash);
+    assert_eq!(p2_hash["result"]["structuredContent"]["rev"], rev);
+    assert!(
+        serde_json::to_vec(&p2_hash["result"]["structuredContent"])
+            .unwrap()
+            .len()
+            < 100
+    );
 
     // 5. Reap browser [?] orphan in demo mode, then provision A100 >= 70GB (40GB -> 80GB retry)
     let reap = rpc(
@@ -1606,4 +1633,110 @@ fn install_script_hardening_and_cli_fail_closed_without_home() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("cannot determine data directory"));
+}
+
+#[test]
+fn ssr_boot_redaction_escaping_size_budget_and_warm_read_latency() {
+    use colab_mcp::accounts::AccountProfile;
+    use colab_mcp::mcp::tools::serialize_boot_json;
+    use colab_mcp::settings::AuthMode;
+    use colab_mcp::usage::{BalanceHistory, BalancePoint};
+    use colab_mcp::util::now_secs;
+    use std::time::Instant;
+
+    let escaped = serialize_boot_json(&json!({
+        "xss": "</script><tag>&\u{2028}\u{2029}"
+    }))
+    .unwrap();
+    assert!(!escaped.contains("</script>"));
+    assert!(!escaped.contains('<'));
+    assert!(!escaped.contains('>'));
+    assert!(!escaped.contains('&'));
+    assert!(!escaped.contains('\u{2028}'));
+    assert!(!escaped.contains('\u{2029}'));
+    assert!(escaped.contains("\\u003c/script\\u003e\\u003ctag\\u003e\\u0026\\u2028\\u2029"));
+
+    let dir = PrivateDir::new(&std::env::temp_dir(), "ssr-boot").unwrap();
+    let coord = ColabCoordinator::with_host(dir.path().to_owned(), Some(true), Host::denied());
+    coord.refresh(true).unwrap();
+
+    // Seed an oversized 320-point balance_history + secret + XSS-like account label.
+    let now = now_secs();
+    let pts: Vec<BalancePoint> = (0..320)
+        .map(|i| BalancePoint {
+            at_secs: now.saturating_sub((320 - i) * 60),
+            balance_cu: 500.0 - (i as f64) * 0.1,
+        })
+        .collect();
+    let _history = BalanceHistory::from_points(pts);
+    let synthetic = ["hf_", "1234567890", "ABCDEFGHIJKLMN"].concat();
+    coord.set_hf_token(synthetic.clone());
+    coord
+        .add_account(AccountProfile {
+            id: "ssr-test".into(),
+            label: "</script>&\u{2028}".into(),
+            email: None,
+            auth_mode: AuthMode::OAuth2,
+            added_at: now,
+        })
+        .unwrap();
+
+    let loader = HtmlLoader::new(None);
+    let _ = loader.load().unwrap();
+
+    // Non-UI connection must still receive static null boot without session details.
+    let mut non_ui = init_connection("2025-11-25", json!({}), &coord, &loader);
+    let non_ui_res = rpc(
+        &mut non_ui,
+        &coord,
+        &loader,
+        1,
+        "resources/read",
+        json!({ "uri": APP_URI }),
+    );
+    let non_ui_html = non_ui_res["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(non_ui_html.contains("__COLAB_BOOT__=[null][0]"));
+    assert!(!non_ui_html.contains("c-g4-train"));
+
+    // UI connection receives SSR boot <= 65_536 B, redacted & escaped, in <2ms warm read.
+    let mut ui_conn = init_connection(
+        "2025-11-25",
+        json!({"io.modelcontextprotocol/ui":{"mimeTypes":[APP_MIME]}}),
+        &coord,
+        &loader,
+    );
+    let _ = rpc(
+        &mut ui_conn,
+        &coord,
+        &loader,
+        2,
+        "resources/read",
+        json!({ "uri": APP_URI }),
+    );
+    let t0 = Instant::now();
+    let ui_res = rpc(
+        &mut ui_conn,
+        &coord,
+        &loader,
+        3,
+        "resources/read",
+        json!({ "uri": APP_URI }),
+    );
+    let elapsed = t0.elapsed();
+    let ui_html = ui_res["result"]["contents"][0]["text"].as_str().unwrap();
+    assert!(
+        ui_html.len() <= 65_536,
+        "SSR HTML {} B > 65536",
+        ui_html.len()
+    );
+    assert!(!ui_html.contains(&synthetic));
+    assert!(!ui_html.contains("</script>&"));
+    assert!(
+        elapsed < Duration::from_millis(2),
+        "warm resources/read took {:?} (expected <2ms)",
+        elapsed
+    );
+    coord.shutdown();
 }

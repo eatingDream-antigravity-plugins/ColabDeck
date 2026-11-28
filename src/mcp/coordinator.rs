@@ -282,10 +282,16 @@ impl PanelSnapshot {
 
     fn snapshot_json(payload: &Value, rev: u64, since_rev: Option<u64>, entered: Instant) -> Value {
         if since_rev == Some(rev) {
-            return json!({ "unchanged": true, "rev": rev, "server_ms": entered.elapsed().as_millis() as u64 });
+            return json!({
+                "unchanged": true,
+                "rev": rev,
+                "hash": rev.to_string(),
+                "server_ms": entered.elapsed().as_millis() as u64
+            });
         }
         let mut value = payload.clone();
         value["rev"] = json!(rev);
+        value["hash"] = json!(rev.to_string());
         value["server_ms"] = json!(entered.elapsed().as_millis() as u64);
         value["unchanged"] = json!(false);
         value

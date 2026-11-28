@@ -16,7 +16,7 @@ const templatePath = path.join(__dirname, "template.html");
 const distDir = path.join(__dirname, "dist");
 const outHtml = path.join(distDir, "panel.html");
 const BOOT_TOKEN = "/*__COLAB_MCP_BOOT__*/";
-const MODULES = ["kit/bridge.ts", "i18n.ts"];
+const MODULES = ["kit/bridge.ts", "i18n.ts", "sync.ts"];
 const SIZE_FAIL_BYTES = DEFAULT_MAX_BYTES;
 const SIZE_WARN_BYTES = WARN_BYTES;
 

@@ -6,6 +6,16 @@ import { fileURLToPath } from "node:url";
 import { STRINGS, tr, fmtDur, fmtCu, fmtErr, projectChart } from "../i18n.ts";
 import { App, applyHostContext, LATEST_PROTOCOL_VERSION } from "../kit/bridge.ts";
 import {
+  adaptPollDelay,
+  canSchedulePoll,
+  readCachedSnap,
+  selectBootHydration,
+  SNAP_CACHE_KEY,
+  updateEwmaRtt,
+  writeCachedSnap,
+  type StorageLike,
+} from "../sync.ts";
+import {
   assertPanelInvariants,
   assertI18nParity,
   assertEnNoCjk,
@@ -164,4 +174,74 @@ test("packed panel.html passes Panel Kit Lucid Indigo invariants and security/UX
   assert.ok(!html.includes('class="cd"></span>'), "auto chip dot must not collide with .cd card class");
   assert.ok(html.includes("max-width:520px"), "narrow breakpoint must be 520px");
   assert.ok(html.includes("max-width:640px"), "2x2 KPI breakpoint must be 640px");
+  assert.ok(appSrc.includes("pollSeq"), "app.ts must drop stale replies with monotonic pollSeq");
+  assert.ok(appSrc.includes("snapFromCache"), "app.ts must clear snapFromCache on live poll");
+  assert.ok(appSrc.includes("snap?.partial"), "app.ts must force full poll when SSR boot was trimmed");
+});
+
+test("localStorage SWR hydration compacts history, strips hf_token, and overrides stale SSR boot", () => {
+  const store = new Map<string, string>();
+  const storage: StorageLike = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => { store.set(k, v); },
+  };
+  const history = Array.from({ length: 100 }, (_, i) => ({ at_secs: 1000 + i, balance_cu: 100 - i }));
+  const syntheticTok = ["hf_", "test", "_fixture"].join("");
+  const saved = writeCachedSnap(storage, { rev: 42, hf_token: syntheticTok, balance_history: history }, 2000);
+  assert.equal(saved, true);
+  const raw = store.get(SNAP_CACHE_KEY)!;
+  assert.ok(!raw.includes(syntheticTok), "localStorage must never persist hf_token");
+
+  const cached = readCachedSnap<{ rev: number; bootTs?: number; balance_history?: unknown[] }>(storage);
+  assert.ok(cached);
+  assert.equal(cached.v, 1);
+  assert.equal(cached.savedAt, 2000);
+  assert.equal(cached.data.rev, 42);
+  assert.equal(cached.data.balance_history?.length, 64);
+
+  // Reopen with newer localStorage than SSR bootTs -> hydrates from localStorage
+  const fromCachePick = selectBootHydration({ rev: 2, bootTs: 1500 }, cached, 2100);
+  assert.equal(fromCachePick.fromCache, true);
+  assert.equal(fromCachePick.freshBoot, false);
+  assert.equal(fromCachePick.snap?.rev, 42);
+
+  // Reopen with no SSR boot -> hydrates from localStorage
+  const noBootPick = selectBootHydration(null, cached, 2100);
+  assert.equal(noBootPick.fromCache, true);
+  assert.equal(noBootPick.snap?.rev, 42);
+
+  // Failing storage never throws
+  const broken: StorageLike = {
+    getItem: () => { throw new Error("SecurityError"); },
+    setItem: () => { throw new Error("QuotaExceededError"); },
+  };
+  assert.equal(writeCachedSnap(broken, { rev: 1 }), false);
+  assert.equal(readCachedSnap(broken), null);
+});
+
+test("fresh-boot poll coalescing, RTT EWMA backoff, and document.hidden pause", () => {
+  const cached: { v: number; savedAt: number; data: { rev: number; bootTs?: number } } = { v: 1, savedAt: 1000, data: { rev: 10 } };
+  const fresh = selectBootHydration({ rev: 12, bootTs: 2000 }, cached, 3200);
+  assert.equal(fresh.fromCache, false);
+  assert.equal(fresh.freshBoot, true);
+
+  const stale = selectBootHydration({ rev: 12, bootTs: 2000 }, cached, 5000);
+  assert.equal(stale.fromCache, false);
+  assert.equal(stale.freshBoot, false);
+
+  const first = updateEwmaRtt(0, 3200, 200);
+  assert.equal(first.netRttMs, 3000);
+  assert.equal(first.ewmaRttMs, 3000);
+  const next = updateEwmaRtt(first.ewmaRttMs, 1020, 20);
+  assert.equal(next.netRttMs, 1000);
+  assert.equal(next.ewmaRttMs, 2400);
+
+  assert.equal(adaptPollDelay(4000, 100, false, 0), 4000);
+  assert.equal(adaptPollDelay(4000, 3000, false, 0), 9000);
+  assert.equal(adaptPollDelay(4000, 8000, false, 0), 15_000);
+  assert.equal(adaptPollDelay(12_000, 4500, false, 0), 13_500);
+  assert.equal(adaptPollDelay(4000, 100, true, 4), 10_000);
+
+  assert.equal(canSchedulePoll(true, false, true, true, true), false);
+  assert.equal(canSchedulePoll(true, false, true, false, true), true);
 });

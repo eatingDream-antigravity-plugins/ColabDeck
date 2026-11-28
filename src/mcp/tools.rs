@@ -9,7 +9,7 @@ use crate::cli::RESERVED_VM_PORT;
 use crate::error::{Error, Result as ColabResult};
 use crate::mcp::coordinator::{AccountContext, ColabCoordinator, ProvisionRequest, StopResult};
 use crate::settings::{Accelerator, AuthMode, BackendMode, SettingsPatch};
-use crate::util::{display_path, now_secs};
+use crate::util::{display_path, now_millis, now_secs};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs::{self, File, Metadata};
@@ -47,6 +47,10 @@ impl CompiledTemplate {
                 has_placeholder: false,
             }
         }
+    }
+
+    pub fn base_html_len(&self) -> usize {
+        self.prefix.len() + self.suffix.len()
     }
 
     pub fn render_with_boot(&self, boot_json: &str) -> String {
@@ -102,6 +106,10 @@ impl HtmlLoader {
             embedded: Arc::new(CompiledTemplate::from_html(EMBEDDED_PANEL_HTML)),
             cache: Mutex::new(None),
         }
+    }
+
+    pub fn is_embedded(&self) -> bool {
+        self.path.is_none()
     }
 
     pub fn load(&self) -> Result<Arc<CompiledTemplate>, String> {
@@ -175,11 +183,127 @@ pub fn list_resources_json() -> Value {
     })
 }
 
-pub fn read_resource_json(uri: &str, html_loader: &HtmlLoader) -> Result<Value, String> {
+pub const MAX_SSR_HTML_BYTES: usize = 65_536;
+
+fn escape_script_json(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+pub fn serialize_boot_json(value: &Value) -> Result<String, String> {
+    serde_json::to_string(value)
+        .map(|raw| escape_script_json(&raw))
+        .map_err(|e| format!("failed to serialize SSR boot JSON: {e}"))
+}
+
+fn build_ssr_boot_json(
+    coord: &ColabCoordinator,
+    entered: Instant,
+    max_boot_bytes: usize,
+) -> Result<String, String> {
+    let mut snap = coord.cached_snapshot().json(None, entered);
+    if let Some(obj) = snap.as_object_mut() {
+        obj.remove("hf_token");
+        obj.insert("bootTs".into(), json!(now_millis()));
+    }
+    let mut trimmed = false;
+    let mut encoded = serialize_boot_json(&snap)?;
+    for keep in [64usize, 16, 0] {
+        if encoded.len() <= max_boot_bytes {
+            break;
+        }
+        if let Some(arr) = snap
+            .get_mut("balance_history")
+            .and_then(Value::as_array_mut)
+        {
+            if arr.len() > keep {
+                let drop_n = arr.len() - keep;
+                arr.drain(..drop_n);
+                trimmed = true;
+                if let Some(obj) = snap.as_object_mut() {
+                    obj.insert("partial".into(), json!(true));
+                }
+                encoded = serialize_boot_json(&snap)?;
+            }
+        }
+    }
+    if encoded.len() > max_boot_bytes {
+        if let Some(runs) = snap.get_mut("plugin_runs").and_then(Value::as_array_mut) {
+            for run in runs {
+                if let Some(obj) = run.as_object_mut() {
+                    obj.insert("log_tail".into(), json!([]));
+                }
+            }
+            trimmed = true;
+            if let Some(obj) = snap.as_object_mut() {
+                obj.insert("partial".into(), json!(true));
+            }
+            encoded = serialize_boot_json(&snap)?;
+        }
+    }
+    for key in ["ended_sessions", "plugins", "hardware_rates"] {
+        if encoded.len() <= max_boot_bytes {
+            break;
+        }
+        if let Some(obj) = snap.as_object_mut() {
+            if obj.contains_key(key) {
+                obj.insert(
+                    key.into(),
+                    if key == "hardware_rates" {
+                        json!({})
+                    } else {
+                        json!([])
+                    },
+                );
+                trimmed = true;
+                obj.insert("partial".into(), json!(true));
+                encoded = serialize_boot_json(&snap)?;
+            }
+        }
+    }
+    if trimmed && encoded.len() > max_boot_bytes {
+        if let Some(arr) = snap
+            .get_mut("balance_history")
+            .and_then(Value::as_array_mut)
+        {
+            arr.clear();
+            encoded = serialize_boot_json(&snap)?;
+        }
+    }
+    if encoded.len() > max_boot_bytes {
+        encoded = "null".to_owned();
+    }
+    Ok(encoded)
+}
+
+pub fn read_resource_json(
+    uri: &str,
+    html_loader: &HtmlLoader,
+    coord: &ColabCoordinator,
+    ui: bool,
+    entered: Instant,
+) -> Result<Value, String> {
     if uri != APP_URI {
         return Err(format!("unknown resource URI: {uri}"));
     }
-    let html = html_loader.load()?.render_with_boot("null");
+    let template = html_loader.load()?;
+    let boot = if ui {
+        let budget = MAX_SSR_HTML_BYTES.saturating_sub(template.base_html_len());
+        build_ssr_boot_json(coord, entered, budget)?
+    } else {
+        "null".to_owned()
+    };
+    let html = template.render_with_boot(&boot);
     let mut result = json!({
         "contents": [{
             "uri": APP_URI,
@@ -312,6 +436,7 @@ fn build_tool_registry() -> Value {
                     "additionalProperties": false,
                     "properties": {
                         "since_rev": { "type": ["integer", "null"] },
+                        "if_hash": { "type": ["string", "null"] },
                         "force": { "type": "boolean" }
                     }
                 },
@@ -667,7 +792,11 @@ pub(crate) fn call_tool_json(
                 coord.panel_snapshot()
             };
             let since = if !force && name == "colab_app_poll" {
-                args.get("since_rev").and_then(Value::as_u64)
+                args.get("since_rev").and_then(Value::as_u64).or_else(|| {
+                    args.get("if_hash")
+                        .and_then(Value::as_str)
+                        .and_then(|hash| hash.parse::<u64>().ok())
+                })
             } else {
                 None
             };

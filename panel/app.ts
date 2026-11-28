@@ -1,5 +1,6 @@
 import { App, type ToolCallResult } from "./kit/bridge.ts";
 import { tr, fmtDur, fmtCu, fmtErr, projectChart, type BalancePoint, type Locale, type LocalizedText } from "./i18n.ts";
+import { adaptPollDelay, canSchedulePoll, readCachedSnap, selectBootHydration, updateEwmaRtt, writeCachedSnap, type StorageLike } from "./sync.ts";
 
 interface Account {
   id: string;
@@ -208,6 +209,8 @@ interface HardwareRate {
 
 interface Snap {
   rev: number;
+  bootTs?: number;
+  partial?: boolean;
   unchanged?: boolean;
   syncing?: boolean;
   backend_mode?: string;
@@ -335,8 +338,8 @@ const mkFlds = (defs: readonly FieldDef[]): [HTMLDivElement, HTMLSelectElement |
 });
 const mkFrm = (flds: readonly [HTMLDivElement, unknown][], cb?: () => void): DirtyForm => { const f: DirtyForm = E("form", "fg", ...flds.map((x) => x[0])); f.oninput = () => (f._d = 1); f.onchange = () => { f._d = 1; cb?.(); }; return f; };
 
-let snap: Snap | null = null, snapAt = Date.now(), lastSync = 0, tab: TabId = TABS[0], lang: Locale = ZH, pickedLang = false, chartIdx = 2;
-let auto = true, busy = false, pollT: ReturnType<typeof setTimeout> | null = null, delayMs = 4e3, rttMs = 120, failCount = 0, down = false, connOk = false, epoch = 0, snapEp = -1;
+let snap: Snap | null = null, snapAt = Date.now(), lastSync = 0, snapFromCache = false, tab: TabId = TABS[0], lang: Locale = ZH, pickedLang = false, chartIdx = 2;
+let auto = true, busy = false, pollT: ReturnType<typeof setTimeout> | null = null, delayMs = 4e3, ewmaRttMs = 0, pollSeq = 0, failCount = 0, down = false, connOk = false, epoch = 0, snapEp = -1;
 let armed: string | null = null, swPrev: { id: string; data: SwitchPreviewData } | null = null, hfModels: HfModel[] = [], hfFit: HfFitResult | null = null, selPlg = LL, builtPlg: string | null = null, selRepo = "unsloth/Qwen3-32B-GGUF";
 let bnr: BannerState | null = null, bnrRaw = false, dimErr: string | null = null, fbT: ReturnType<typeof setTimeout> | undefined;
 
@@ -632,18 +635,22 @@ function renderHeader(): void {
 
 const VIEWS: Record<TabId, (s: Snap) => void> = { overview: ov, sessions: sv.r, tunnels: tv.r, deploy: dv.r, settings: setv.r };
 const renderAll = (): void => { renderHeader(); for (const n of TABS) H($(`v-${n}`), tab !== n); if (snap) VIEWS[tab](snap); };
-const applySnap = (d: Snap | null | undefined, epk = epoch): void => {
-  if (!d || d.unchanged || epk < snapEp || (snap && epk === snapEp && d.rev != null && d.rev < snap.rev)) return;
-  snap = d; snapEp = epk; snapAt = lastSync = Date.now(); if (d.settings?.locale && !pickedLang) lang = d.settings.locale === "en" ? "en" : ZH; renderAll();
+const getStorage = (): StorageLike | null => { try { return typeof localStorage !== "undefined" ? localStorage : null; } catch { return null; } };
+const nowMs = (): number => typeof performance !== "undefined" ? performance.now() : Date.now();
+const applySnap = (d: Snap | null | undefined, epk = epoch, fromCache = false): void => {
+  if (!d || d.unchanged || epk < snapEp || (!snapFromCache && snap && epk === snapEp && d.rev != null && d.rev < snap.rev)) return;
+  snap = d; snapEp = epk; snapFromCache = fromCache; snapAt = lastSync = Date.now();
+  if (!fromCache) writeCachedSnap(getStorage(), d);
+  if (d.settings?.locale && !pickedLang) lang = d.settings.locale === "en" ? "en" : ZH; renderAll();
 };
 const onSnap = (d: Partial<Snap> | null | undefined, epk: number): void => { if (d?.snapshot) applySnap(d.snapshot, epk); else if (d?.rev) applySnap(d as Snap, epk); };
 
 function schedulePoll(): void {
   if (pollT !== null) { CT(pollT); pollT = null; }
-  const a = (snap?.sessions?.length || 0) > 0 || (snap?.provision_jobs || []).some((j) => !j.done) || (snap?.plugin_runs || []).some((r) => r.state === "running");
-  delayMs = down ? MN(3e4, 5e3 * 2 ** MX(0, failCount - 3)) : (rttMs > 1200 ? MN(3e4, a ? 8e3 : 24e3) : (a ? 4e3 : 12e3));
+  const a = (snap?.sessions?.length || 0) > 0 || (snap?.provision_jobs || []).some((j) => !j.done) || (snap?.plugin_runs || []).some((r) => r.state === "running") || !!snap?.syncing;
+  delayMs = adaptPollDelay(a ? 4e3 : 12e3, ewmaRttMs, down, failCount);
   renderHeader();
-  if ((connOk || down) && auto && !DC.hidden && emb()) pollT = setTimeout(() => { void poll(false); }, delayMs);
+  if (canSchedulePoll(connOk, down, auto, DC.hidden, emb())) pollT = setTimeout(() => { void poll(false); }, delayMs);
 }
 async function rpc(tool: string, args: Record<string, unknown>) {
   if (!emb()) throw OA(new Error(""), { code: BNT }) as RpcError;
@@ -655,14 +662,21 @@ async function rpc(tool: string, args: Record<string, unknown>) {
 }
 const errCode = (e: RpcError, fb: string): string => e.code || (/^Timeout:/i.test(e.message || "") ? "bridge_timeout" : fb);
 async function poll(force = false): Promise<void> {
-  if (busy || !emb()) return; busy = true; $("sw").classList.add("on"); const t0 = Date.now(), epk = epoch;
+  if ((!force && busy) || !emb() || (!force && DC.hidden)) return;
+  const seq = ++pollSeq; busy = true; $("sw").classList.add("on"); const t0 = nowMs(), epk = epoch;
   try {
-    const p = await rpc(CM("app_poll"), { since_rev: force ? null : (snap?.rev ?? null), force });
-    rttMs = MX(10, MR(Date.now() - t0 - (+(p?.server_ms ?? 0) || 0))); const wasDown = down; failCount = 0; down = false; lastSync = Date.now();
+    const p = await rpc(CM("app_poll"), { since_rev: (force || snapFromCache || !!snap?.partial) ? null : (snap?.rev ?? null), force });
+    if (seq !== pollSeq) return;
+    ewmaRttMs = updateEwmaRtt(ewmaRttMs, nowMs() - t0, +(p?.server_ms ?? 0) || 0).ewmaRttMs;
+    const wasDown = down; failCount = 0; down = false; lastSync = Date.now();
     if (p && !p.unchanged && p.rev != null) applySnap(p as Snap, epk);
     if (wasDown) { bnr = null; dimErr = null; syncBnr(); flash(t("reconnected")); }
-  } catch (e) { const err = e as RpcError; failCount += 1; if (failCount >= 3) { down = true; dimErr = null; } else if (force) showErr(errCode(err, CLE), err.message || ST(err), err.loc, 1); }
-  finally { busy = false; $("sw").classList.remove("on"); schedulePoll(); }
+  } catch (e) {
+    if (seq !== pollSeq) return;
+    const err = e as RpcError; failCount += 1; if (failCount >= 3) { down = true; dimErr = null; } else if (force) showErr(errCode(err, CLE), err.message || ST(err), err.loc, 1);
+  } finally {
+    if (seq === pollSeq) { busy = false; $("sw").classList.remove("on"); schedulePoll(); }
+  }
 }
 async function act(tool: string, args: Record<string, unknown>, msgOk?: string) {
   const epk = epoch;
@@ -728,7 +742,8 @@ ON(DC, "click", async (ev) => {
 ON(DC, "visibilitychange", () => { if (DC.hidden) { if (pollT !== null) { CT(pollT); pollT = null; } } else if ((connOk || down) && auto && emb()) void poll(false); });
 bridge.ontoolresult = (res) => onSnap(parseR(res as McpToolResult), epoch);
 const bootSnap = (window as Window & { __COLAB_BOOT__?: Snap }).__COLAB_BOOT__;
-if (bootSnap && typeof bootSnap === "object") applySnap(bootSnap, epoch); else renderHeader();
+const bootPick = selectBootHydration(bootSnap, readCachedSnap<Snap>(getStorage()));
+if (bootPick.snap) applySnap(bootPick.snap, epoch, bootPick.fromCache); else renderHeader();
 setInterval(() => { if (!DC.hidden && (tab === "sessions" || tab === "overview") && snap?.sessions?.length) VIEWS[tab](snap); }, 1e3);
 const setDown = (): void => { failCount = 3; down = true; schedulePoll(); };
-if (emb()) bridge.connect().then(() => { if (!bridge.isConnected() || !hst()) return setDown(); connOk = true; if (!snap || snap.syncing) void poll(false); else schedulePoll(); }).catch(setDown);
+if (emb()) bridge.connect().then(() => { if (!bridge.isConnected() || !hst()) return setDown(); connOk = true; if (bootPick.freshBoot) schedulePoll(); else if (!snap || snap.syncing || !bootPick.freshBoot) void poll(false); }).catch(setDown);

@@ -217,9 +217,12 @@ impl Connection {
 }
 
 impl Request {
-    fn fast(&self) -> bool {
+    fn fast(&self, html: &HtmlLoader) -> bool {
+        if self.method == "resources/read" {
+            return html.is_embedded();
+        }
         if self.method != "tools/call" {
-            return self.method != "resources/read";
+            return true;
         }
         let name = self.params["name"].as_str().unwrap();
         let args = &self.params["arguments"];
@@ -260,7 +263,13 @@ impl Request {
             "tools/list" => list_tools_json(self.ui),
             "resources/list" => list_resources_json(),
             "resources/read" => {
-                match read_resource_json(self.params["uri"].as_str().unwrap(), html) {
+                match read_resource_json(
+                    self.params["uri"].as_str().unwrap(),
+                    html,
+                    coord,
+                    self.ui,
+                    self.entered,
+                ) {
                     Ok(result) => result,
                     Err(message) => return error(&self.id, -32603, &message),
                 }
@@ -500,7 +509,7 @@ fn dispatch(
         match item {
             Dispatch::Reply(reply) => deliver(reply),
             Dispatch::Ignore => {}
-            Dispatch::Execute(req) if req.fast() => {
+            Dispatch::Execute(req) if req.fast(html) => {
                 deliver(req.pin_account(coord).run(coord, html))
             }
             Dispatch::Execute(req) => {
@@ -698,6 +707,7 @@ pub fn serve_stdio(
 ) -> io::Result<()> {
     let coord = ColabCoordinator::new(data_dir, force_mock);
     let html = HtmlLoader::new(panel_html);
+    let _ = html.load();
     let (stop, shutdown) = mpsc::channel();
     let guard = {
         let coord = coord.clone();
@@ -837,7 +847,7 @@ mod tests {
         assert_eq!(reply[1]["result"], json!({}));
         assert_eq!(reply[2]["result"]["isError"], false);
         assert_eq!(reply[3]["result"]["structuredContent"]["cancelled"], false);
-        assert_eq!(reply[4]["error"]["code"], -32001);
+        assert!(reply[4]["result"]["contents"][0]["text"].as_str().is_some());
         assert_eq!(reply[5]["result"]["structuredContent"]["stopped"], true);
         coord.shutdown();
     }

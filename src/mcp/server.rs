@@ -719,6 +719,8 @@ pub fn serve_stdio(
                     .is_err_and(|e| e == mpsc::RecvTimeoutError::Timeout)
                 {
                     coord.guard_tick();
+                    #[cfg(not(test))]
+                    coord.keep_fresh_tick(Duration::from_secs(45));
                 }
             })?
     };

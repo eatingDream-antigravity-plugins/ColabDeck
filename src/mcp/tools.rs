@@ -785,10 +785,8 @@ pub(crate) fn call_tool_json(
                     return err_from(&error);
                 }
             }
-            let snapshot = if name == "colab_panel" && args["refresh"] == true {
-                let cached = coord.cached_snapshot();
-                coord.request_refresh(true);
-                cached
+            let snapshot = if name == "colab_panel" {
+                coord.panel_snapshot_fresh()
             } else {
                 coord.panel_snapshot()
             };

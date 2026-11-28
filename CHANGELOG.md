@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.3.1...v0.3.2) (2026-11-28)
+
+
+### Performance Improvements
+
+* add SSR boot snapshot, localStorage SWR hydration, and weak-net adaptive polling ([#18](https://github.com/eatingDream-antigravity-plugins/colab-deck/issues/18)) ([4179a88](https://github.com/eatingDream-antigravity-plugins/colab-deck/commit/4179a88691dd3c8907b927a445348803813183fe))
+
 ## [0.3.1](https://github.com/eatingDream-antigravity-plugins/colab-deck/compare/v0.3.0...v0.3.1) (2026-11-28)
 
 

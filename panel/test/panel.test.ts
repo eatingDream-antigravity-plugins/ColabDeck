@@ -156,6 +156,7 @@ test("packed panel.html passes Panel Kit Lucid Indigo invariants and security/UX
   assert.ok(appSrc.includes("poll_active_secs") && appSrc.includes("poll_idle_secs"), "settings must expose poll intervals");
   assert.ok(appSrc.includes("settings_path") && appSrc.includes("settings_error"), "settings hot-reload path/error wired");
   assert.ok(appSrc.includes("/v1/models"), "OpenAI endpoint curl must target /v1/models");
+  assert.ok(appSrc.includes("`curl -sS '${cUrl.replace(/'/g, \"'\\\\''\")}'`"), "Copy curl must POSIX-single-quote URL");
   assert.ok(appSrc.includes("GPU_ACCS"), "llama-cpp deploy must restrict accelerator options to GPUs");
   assert.ok(appSrc.includes('${orp.length} ${t("ex")}'), "overview KPI must use i18n external count");
   assert.ok(appSrc.includes('en ? "CLI" : t("bo")'), "overview external row must use CLI/Browser badge");

@@ -10,10 +10,11 @@ use crate::sessions::{
     StartSource, TrackedSession,
 };
 use crate::settings::Accelerator;
-use crate::util::{lock_file, write_atomic_private};
+use crate::util::{
+    ensure_private_dir, lock_file, read_private_bounded, write_atomic_private, MAX_STATE_BYTES,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const HISTORY_CAPACITY: usize = 320;
@@ -255,7 +256,7 @@ impl BalanceHistoryStore {
     }
 
     pub fn load(&self) -> BTreeMap<String, BalanceHistory> {
-        let Ok(raw) = fs::read(&self.path) else {
+        let Ok(raw) = read_private_bounded(&self.path, MAX_STATE_BYTES) else {
             return BTreeMap::new();
         };
         let Ok(map) = serde_json::from_slice::<BTreeMap<String, Vec<BalancePoint>>>(&raw) else {
@@ -267,13 +268,19 @@ impl BalanceHistoryStore {
     }
 
     pub fn save_account(&self, account_id: &str, history: &BalanceHistory) {
+        if let Some(parent) = self.path.parent() {
+            if ensure_private_dir(parent).is_err() {
+                return;
+            }
+        }
         let Ok(_guard) = lock_file(&self.lock_path) else {
             return;
         };
-        let mut map: BTreeMap<String, Vec<BalancePoint>> = fs::read(&self.path)
-            .ok()
-            .and_then(|raw| serde_json::from_slice(&raw).ok())
-            .unwrap_or_default();
+        let mut map: BTreeMap<String, Vec<BalancePoint>> =
+            read_private_bounded(&self.path, MAX_STATE_BYTES)
+                .ok()
+                .and_then(|raw| serde_json::from_slice(&raw).ok())
+                .unwrap_or_default();
         map.insert(account_id.to_owned(), history.points());
         if let Ok(bytes) = serde_json::to_vec(&map) {
             let _ = write_atomic_private(&self.path, &bytes);

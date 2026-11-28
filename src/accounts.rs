@@ -7,7 +7,9 @@
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::settings::AuthMode;
-use crate::util::{now_secs, write_atomic_private};
+use crate::util::{
+    ensure_private_dir, now_secs, read_private_bounded, write_atomic_private, MAX_STATE_BYTES,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -154,7 +156,7 @@ impl AccountStore {
                 "accounts registry degraded; cannot read accounts.json",
             )
         };
-        match fs::read(&self.path) {
+        match read_private_bounded(&self.path, MAX_STATE_BYTES) {
             Ok(raw) => {
                 let registry: AccountRegistry =
                     serde_json::from_slice(&raw).map_err(|_| recovery(ErrorKind::Parse))?;
@@ -191,6 +193,7 @@ impl AccountStore {
 
     pub fn save(&self, reg: &AccountRegistry) -> Result<()> {
         self.load()?;
+        ensure_private_dir(&self.data_dir)?;
         let bytes = serde_json::to_vec_pretty(reg)?;
         write_atomic_private(&self.path, &bytes)
     }

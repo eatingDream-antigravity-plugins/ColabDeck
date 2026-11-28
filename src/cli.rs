@@ -9,8 +9,9 @@ use crate::error::{Error, ErrorKind, Result};
 use crate::host::{ExecRequest, ExecResult, Host, LineAction, Stream};
 use crate::settings::{Accelerator, AuthMode};
 use crate::util::{
-    b64_encode, display_path, is_env_key, lock_file, redact_json, redact_secrets, shell_quote,
-    tail, write_atomic_private, CancelToken, PrivateDir,
+    b64_encode, display_path, ensure_private_dir, is_env_key, lock_file, open_private_nofollow,
+    read_private_bounded, redact_json, redact_secrets, shell_quote, tail, write_atomic_private,
+    CancelToken, PrivateDir, MAX_CREDENTIAL_BYTES, MAX_STATE_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -529,9 +530,26 @@ impl CredentialSource {
             Error::new(ErrorKind::AuthRequired,
             "configure a private credentials.json for this account or use the local gcloud ADC store for the default ADC account")
         };
-        let meta = fs::metadata(&path).map_err(|_| unavailable())?;
+        let file = open_private_nofollow(&path).map_err(|_| unavailable())?;
+        let meta = file.metadata().map_err(|_| unavailable())?;
         if !meta.is_file() {
             return Err(unavailable());
+        }
+        if meta.len() > MAX_CREDENTIAL_BYTES {
+            return Err(Error::new(
+                ErrorKind::AuthRequired,
+                "credentials.json exceeds 256 KiB limit",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if meta.permissions().mode() & 0o077 != 0 {
+                return Err(Error::new(
+                    ErrorKind::AuthRequired,
+                    "credentials.json must not be group- or world-accessible (chmod 0600)",
+                ));
+            }
         }
         Ok(Self {
             path,
@@ -569,7 +587,7 @@ impl VerifiedCredentials {
 }
 
 fn bound_identity(path: &Path) -> Result<Option<String>> {
-    match fs::read(path) {
+    match read_private_bounded(path, MAX_STATE_BYTES) {
         Ok(raw) => {
             let (_, email): (AuthMode, String) = serde_json::from_slice(&raw).map_err(|_| {
                 Error::new(
@@ -702,8 +720,16 @@ impl RealCliBackend {
         let source = if auth_mode == AuthMode::OAuth2 {
             // The Colab CLI uses one OS keyring entry for OAuth2. An authorized-user
             // ADC file pins the OAuth identity through both whoami and the actual command.
-            CredentialSource::read(profile_file).map_err(|_| Error::new(ErrorKind::AuthRequired,
-                "OAuth2 requires an account-specific authorized-user credentials.json; the shared OS keyring cannot pin the account"))?
+            CredentialSource::read(profile_file).map_err(|e| {
+                if e.message.contains("chmod 0600") || e.message.contains("256 KiB") {
+                    e
+                } else {
+                    Error::new(
+                        ErrorKind::AuthRequired,
+                        "OAuth2 requires an account-specific authorized-user credentials.json; the shared OS keyring cannot pin the account",
+                    )
+                }
+            })?
         } else if account_id != ADC_ACCOUNT_ID
             || !fs::symlink_metadata(&profile_file)
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
@@ -744,7 +770,7 @@ impl RealCliBackend {
                 return Ok(previous);
             }
         }
-        let creds = fs::read(&source.path)
+        let creds = read_private_bounded(&source.path, MAX_CREDENTIAL_BYTES)
             .map_err(|_| Error::new(ErrorKind::AuthRequired, "cannot read account credentials"))?;
         if source != CredentialSource::read(source.path.clone())? {
             return Err(Error::new(
@@ -872,7 +898,16 @@ impl RealCliBackend {
     ) -> Result<ExecResult> {
         let colab = self.resolve_colab()?;
         if let Some(parent) = state_file.and_then(|p| p.parent()) {
-            let _ = fs::create_dir_all(parent);
+            if let Some(accounts_dir) = parent
+                .parent()
+                .filter(|g| g.file_name().is_some_and(|n| n == "accounts"))
+            {
+                if let Some(data_dir) = accounts_dir.parent() {
+                    let _ = ensure_private_dir(data_dir);
+                }
+                let _ = ensure_private_dir(accounts_dir);
+            }
+            let _ = ensure_private_dir(parent);
         }
         let argv = build_argv(auth_mode, state_file, cmd)?;
         let mut req = ExecRequest::new(colab, argv);
@@ -949,7 +984,7 @@ pub(crate) fn pin_session(
 }
 
 pub(crate) fn read_session(state_file: &Path, session: &str) -> Option<serde_json::Value> {
-    let raw = fs::read(state_file).ok()?;
+    let raw = read_private_bounded(state_file, MAX_STATE_BYTES).ok()?;
     serde_json::from_slice::<serde_json::Value>(&raw)
         .ok()?
         .get(session)
@@ -961,7 +996,7 @@ fn update_session_file(
     change: impl FnOnce(&mut serde_json::Map<String, Value>) -> Result<()>,
 ) -> Result<()> {
     let _lock = lock_file(&state_file.with_extension("lock"))?;
-    let mut sessions = match fs::read(state_file) {
+    let mut sessions = match read_private_bounded(state_file, MAX_STATE_BYTES) {
         Ok(raw) => serde_json::from_slice(&raw)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
         Err(error) => return Err(error.into()),
@@ -1011,12 +1046,7 @@ pub(crate) fn ensure_ssh_key(host: &Host) -> Result<()> {
     if key_path.exists() {
         return Ok(());
     }
-    fs::create_dir_all(&ssh_dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&ssh_dir, fs::Permissions::from_mode(0o700));
-    }
+    ensure_private_dir(&ssh_dir)?;
     let req = ExecRequest::new(
         "ssh-keygen",
         [
@@ -1115,7 +1145,7 @@ impl ColabBackend for RealCliBackend {
         // a snapshot so it cannot overwrite concurrent allocations.
         let snapshot = PrivateDir::new(&std::env::temp_dir(), "list")?;
         let snapshot_file = snapshot.path().join("sessions.json");
-        match fs::read(state_file) {
+        match read_private_bounded(state_file, MAX_STATE_BYTES) {
             Ok(raw) => write_atomic_private(&snapshot_file, &raw)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
@@ -1592,6 +1622,26 @@ diagnostic remains visible"#
         assert_ne!(credentials.env(), invoke(&identity).unwrap().env());
         backend.invalidate_credentials(Some(account));
         assert_eq!(invoke(&other).err().unwrap().kind, ErrorKind::AuthRequired);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+            let err = CredentialSource::read(source.clone()).err().unwrap();
+            assert_eq!(err.kind, ErrorKind::AuthRequired);
+            assert!(err.message.contains("chmod 0600"));
+
+            let link = source.with_file_name("link-creds.json");
+            std::os::unix::fs::symlink(&source, &link).unwrap();
+            assert!(CredentialSource::read(link).is_err());
+
+            fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(CredentialSource::read(source.clone()).is_ok());
+
+            let big = source.with_file_name("big-creds.json");
+            write_atomic_private(&big, &vec![b' '; (MAX_CREDENTIAL_BYTES as usize) + 1]).unwrap();
+            assert!(CredentialSource::read(big).is_err());
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::error::{Error, ErrorKind, Result};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -445,10 +445,216 @@ pub fn fnv1a_64(data: &[u8]) -> u64 {
     hash
 }
 
+pub const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_CREDENTIAL_BYTES: u64 = 256 * 1024;
+
+#[cfg(unix)]
+fn current_euid() -> u32 {
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+    // SAFETY: geteuid takes no pointers and always succeeds on POSIX.
+    unsafe { geteuid() }
+}
+
+fn is_temp_root(path: &Path) -> bool {
+    let tmp = std::env::temp_dir();
+    path == tmp || path.canonicalize().ok() == tmp.canonicalize().ok()
+}
+
+fn harden_existing_dir(path: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if !meta.file_type().is_dir() {
+        return Err(Error::invalid(
+            "path",
+            format!("{} must be a real directory, not a symlink", path.display()),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+        if meta.uid() != current_euid() {
+            return Err(Error::invalid(
+                "path",
+                format!("{} is not owned by the current user", path.display()),
+            ));
+        }
+        if meta.permissions().mode() & 0o777 != 0o700 {
+            let mut opts = OpenOptions::new();
+            opts.read(true);
+            #[cfg(target_os = "linux")]
+            opts.custom_flags(0o400000 | 0o200000); // O_NOFOLLOW | O_DIRECTORY
+            #[cfg(target_os = "macos")]
+            opts.custom_flags(0x0100 | 0x100000); // O_NOFOLLOW | O_DIRECTORY
+            if let Ok(dir) = opts.open(path) {
+                let fd_meta = dir.metadata()?;
+                if !fd_meta.is_dir() || fd_meta.uid() != current_euid() {
+                    return Err(Error::invalid(
+                        "path",
+                        format!("{} must be an owner-owned directory", path.display()),
+                    ));
+                }
+                dir.set_permissions(fs::Permissions::from_mode(0o700))?;
+            } else {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ensure `path` is a real directory owned by the current user with `0700` permissions on Unix.
+pub fn ensure_private_dir(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => return harden_existing_dir(path),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
+    harden_existing_dir(path)
+}
+
+/// Ensure `root` and each nested child directory exist with `0700` permissions on Unix.
+pub fn ensure_private_subdir(root: &Path, parts: &[&str]) -> Result<PathBuf> {
+    let mut cur = root.to_path_buf();
+    ensure_private_dir(&cur)?;
+    for part in parts {
+        cur.push(part);
+        ensure_private_dir(&cur)?;
+    }
+    Ok(cur)
+}
+
+/// Open a regular file without following symlinks or blocking on FIFOs.
+pub fn open_private_nofollow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(target_os = "linux")]
+        const FLAGS: i32 = 0o400000 | 0o4000; // O_NOFOLLOW | O_NONBLOCK
+        #[cfg(target_os = "macos")]
+        const FLAGS: i32 = 0x0100 | 0x0004; // O_NOFOLLOW | O_NONBLOCK
+        options.custom_flags(FLAGS);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "symlinks are rejected",
+        ));
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Read a regular file (without following symlinks) up to `max_bytes`.
+pub fn read_private_bounded(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+    let file = open_private_nofollow(path)?;
+    let meta = file.metadata()?;
+    if meta.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("file exceeds {max_bytes} bytes"),
+        ));
+    }
+    let mut buf = Vec::with_capacity((meta.len() as usize).min(64 * 1024));
+    file.take(max_bytes + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("file exceeds {max_bytes} bytes"),
+        ));
+    }
+    Ok(buf)
+}
+
+/// Read a UTF-8 regular file (without following symlinks) up to `max_bytes`.
+pub fn read_private_bounded_string(path: &Path, max_bytes: u64) -> io::Result<String> {
+    let bytes = read_private_bounded(path, max_bytes)?;
+    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// Remove dead-PID owner-owned `.cmcp-{adc,session,list}-<pid>-*` temp directories.
+pub fn sweep_stale_temp_dirs() {
+    sweep_stale_temp_dirs_in(&std::env::temp_dir());
+}
+
+pub fn sweep_stale_temp_dirs_in(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        const PREFIXES: [&str; 3] = [".cmcp-adc-", ".cmcp-session-", ".cmcp-list-"];
+        const ESRCH: i32 = 3;
+        unsafe extern "C" {
+            fn kill(pid: i32, signal: i32) -> i32;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        let euid = current_euid();
+        let self_pid = std::process::id();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            let Some(rest) = PREFIXES.iter().find_map(|p| name_str.strip_prefix(p)) else {
+                continue;
+            };
+            let Some(pid_str) = rest.split('-').next() else {
+                continue;
+            };
+            let Ok(pid) = pid_str.parse::<u32>() else {
+                continue;
+            };
+            if pid == 0 || pid > i32::MAX as u32 || pid == self_pid {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !meta.file_type().is_dir() || meta.uid() != euid {
+                continue;
+            }
+            // SAFETY: kill(pid, 0) checks process existence without delivering a signal.
+            let rc = unsafe { kill(pid as i32, 0) };
+            if rc == -1 && io::Error::last_os_error().raw_os_error() == Some(ESRCH) {
+                let _ = fs::remove_dir_all(path);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
 /// Hold the returned file open for the duration of the transaction.
 pub(crate) fn lock_file(path: &Path) -> Result<File> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if !is_temp_root(parent) {
+            ensure_private_dir(parent)?;
+        }
     }
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -456,8 +662,15 @@ pub(crate) fn lock_file(path: &Path) -> Result<File> {
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
+        #[cfg(target_os = "linux")]
+        options.custom_flags(0o400000 | 0o4000); // O_NOFOLLOW | O_NONBLOCK
+        #[cfg(target_os = "macos")]
+        options.custom_flags(0x0100 | 0x0004); // O_NOFOLLOW | O_NONBLOCK
     }
     let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(Error::invalid("lock", "lock target must be a regular file"));
+    }
     file.lock()?;
     Ok(file)
 }
@@ -589,5 +802,60 @@ mod tests {
         let input = format!("val={sample} ok");
         let masked = redact_secrets(&input, &[sample]);
         assert_eq!(masked, "val=*** ok");
+    }
+
+    #[test]
+    fn ensure_private_dir_and_bounded_reads_harden_permissions_and_reject_symlinks() {
+        let root = PrivateDir::new(&std::env::temp_dir(), "sec-util").unwrap();
+        let dir = root.path().join("nested");
+        fs::create_dir(&dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+            ensure_private_dir(&dir).unwrap();
+            let mode = fs::symlink_metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+
+            let target = root.path().join("secret.txt");
+            fs::write(&target, b"hello").unwrap();
+            let link = root.path().join("link.txt");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(ensure_private_dir(&link).is_err());
+            assert!(read_private_bounded(&link, 1024).is_err());
+            assert!(lock_file(&link).is_err());
+        }
+        let big = root.path().join("big.bin");
+        fs::write(&big, vec![b'a'; 64]).unwrap();
+        assert!(read_private_bounded(&big, 32).is_err());
+        assert_eq!(read_private_bounded(&big, 64).unwrap().len(), 64);
+    }
+
+    #[test]
+    fn sweep_stale_temp_dirs_removes_only_dead_pid_cmcp_dirs() {
+        let root = PrivateDir::new(&std::env::temp_dir(), "sec-sweep").unwrap();
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let dead_pid = child.id();
+        let _ = child.wait().unwrap();
+
+        let dead_adc = root.path().join(format!(".cmcp-adc-{dead_pid}-1-0"));
+        let dead_sess = root.path().join(format!(".cmcp-session-{dead_pid}-1-0"));
+        let dead_list = root.path().join(format!(".cmcp-list-{dead_pid}-1-0"));
+        let live_adc = root
+            .path()
+            .join(format!(".cmcp-adc-{}-1-0", std::process::id()));
+        let unrelated = root.path().join(format!("other-{dead_pid}-1-0"));
+        for d in [&dead_adc, &dead_sess, &dead_list, &live_adc, &unrelated] {
+            fs::create_dir(d).unwrap();
+        }
+        sweep_stale_temp_dirs_in(root.path());
+        assert!(!dead_adc.exists());
+        assert!(!dead_sess.exists());
+        assert!(!dead_list.exists());
+        assert!(live_adc.exists());
+        assert!(unrelated.exists());
     }
 }

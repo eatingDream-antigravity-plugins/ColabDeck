@@ -559,10 +559,7 @@ fn run_real_tunnel(
             break None;
         }
         match child.try_wait() {
-            Ok(Some(status)) => {
-                kill_process_group(&mut child);
-                break status.code();
-            }
+            Ok(Some(status)) => break status.code(),
             Err(_) => {
                 kill_process_group(&mut child);
                 break None;

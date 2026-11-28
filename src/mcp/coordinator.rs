@@ -34,8 +34,8 @@ use crate::usage::{
     BalanceHistoryStore, UsageSnapshot,
 };
 use crate::util::{
-    display_path, generate_session_name, now_millis, now_secs, redact_json, redact_secrets,
-    CancelToken, PrivateDir,
+    display_path, ensure_private_dir, generate_session_name, now_millis, now_secs, redact_json,
+    redact_secrets, CancelToken, PrivateDir,
 };
 use crate::watchdog::{cancel_watchdog, extend_watchdog, start_watchdog, watchdog_status};
 use serde::{Deserialize, Serialize};
@@ -337,6 +337,31 @@ pub struct ProvisionRequest {
     pub min_balance_cu: Option<Option<f64>>,
 }
 
+fn harden_existing_data_dirs(data_dir: &Path) {
+    if !data_dir
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_dir())
+    {
+        return;
+    }
+    let _ = ensure_private_dir(data_dir);
+    for sub in ["accounts", "plugins", "reservations", "endpoints"] {
+        let dir = data_dir.join(sub);
+        if dir.symlink_metadata().is_ok_and(|m| m.file_type().is_dir()) {
+            let _ = ensure_private_dir(&dir);
+        }
+    }
+    let accounts_dir = data_dir.join("accounts");
+    if let Ok(entries) = std::fs::read_dir(&accounts_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.symlink_metadata().is_ok_and(|m| m.file_type().is_dir()) {
+                let _ = ensure_private_dir(&p);
+            }
+        }
+    }
+}
+
 struct Reservation {
     coordinator: Arc<ColabCoordinator>,
     account: AccountKey,
@@ -374,6 +399,8 @@ impl ColabCoordinator {
         host: Host,
         history_dir: Option<PathBuf>,
     ) -> Arc<Self> {
+        crate::util::sweep_stale_temp_dirs();
+        harden_existing_data_dirs(&data_dir);
         let settings_store = SettingsStore::new(&data_dir);
         let account_store = AccountStore::new(&data_dir);
         let ledger_store = SessionLedger::new(&data_dir);
@@ -513,6 +540,7 @@ impl ColabCoordinator {
     pub fn shutdown(&self) {
         self.shutdown.cancel();
         self.tunnels.close_all();
+        self.real_backend.invalidate_credentials(None);
         let state = self.state.lock().unwrap();
         for job in &state.jobs {
             job.cancel.cancel();

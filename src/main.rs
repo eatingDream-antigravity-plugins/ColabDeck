@@ -5,17 +5,16 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-fn default_data_dir() -> PathBuf {
+fn default_data_dir() -> Option<PathBuf> {
     if let Ok(d) = env::var("COLAB_MCP_DATA_DIR") {
         let t = d.trim();
         if !t.is_empty() {
-            return PathBuf::from(t);
+            return Some(PathBuf::from(t));
         }
     }
-    if let Some(home) = env::var_os("HOME") {
-        return PathBuf::from(home).join(".local/share/colab-mcp");
-    }
-    env::temp_dir().join("colab-mcp")
+    env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(|home| PathBuf::from(home).join(".local/share/colab-mcp"))
 }
 
 fn usage() -> ! {
@@ -39,7 +38,7 @@ fn main() {
         usage();
     }
 
-    let mut data_dir = default_data_dir();
+    let mut data_dir: Option<PathBuf> = None;
     let mut panel_html: Option<PathBuf> = None;
     let mut force_mock: Option<bool> = match env::var("COLAB_MCP_BACKEND").ok().as_deref() {
         Some("mock") => Some(true),
@@ -51,7 +50,10 @@ fn main() {
         match flag.as_str() {
             "--data-dir" => {
                 let Some(val) = args.next() else { usage() };
-                data_dir = PathBuf::from(val);
+                if val.trim().is_empty() {
+                    usage();
+                }
+                data_dir = Some(PathBuf::from(val));
             }
             "--panel-html" => {
                 let Some(val) = args.next() else { usage() };
@@ -62,6 +64,13 @@ fn main() {
             _ => usage(),
         }
     }
+
+    let Some(data_dir) = data_dir.or_else(default_data_dir) else {
+        eprintln!(
+            "colab-mcp error: cannot determine data directory; set HOME, COLAB_MCP_DATA_DIR, or pass --data-dir"
+        );
+        process::exit(1);
+    };
 
     match cmd.as_str() {
         "serve" => {

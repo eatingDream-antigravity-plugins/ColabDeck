@@ -4,7 +4,10 @@
 //! `error` and `util`, never on CLI, sessions, usage, guards, tunnels, or MCP.
 
 use crate::error::{Error, Result};
-use crate::util::{lock_file, write_atomic_private};
+use crate::util::{
+    ensure_private_dir, lock_file, read_private_bounded, read_private_bounded_string,
+    write_atomic_private, MAX_STATE_BYTES,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -380,7 +383,7 @@ impl SettingsStore {
 
     /// Load settings; if corrupt JSON is encountered, move aside to `.corrupt` and fall back cleanly.
     pub fn load(&self) -> (Settings, bool) {
-        let Ok(raw) = fs::read_to_string(&self.path) else {
+        let Ok(raw) = read_private_bounded_string(&self.path, MAX_STATE_BYTES) else {
             return (Settings::default(), false);
         };
         match serde_json::from_str::<Settings>(&raw) {
@@ -399,11 +402,17 @@ impl SettingsStore {
     }
 
     pub fn save(&self, settings: &Settings) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            ensure_private_dir(parent)?;
+        }
         let _guard = lock_file(&self.lock_path)?;
         self.save_locked(settings)
     }
 
     pub fn apply_patch(&self, patch: SettingsPatch) -> Result<Settings> {
+        if let Some(parent) = self.path.parent() {
+            ensure_private_dir(parent)?;
+        }
         let _guard = lock_file(&self.lock_path)?;
         let cur = self.load_current()?.patched(patch)?;
         self.save_locked(&cur)?;
@@ -417,7 +426,7 @@ impl SettingsStore {
     }
 
     pub(crate) fn load_current(&self) -> Result<Settings> {
-        let settings = match fs::read(&self.path) {
+        let settings = match read_private_bounded(&self.path, MAX_STATE_BYTES) {
             Ok(raw) => serde_json::from_slice::<Settings>(&raw)
                 .map_err(|_| Error::invalid("settings", "cannot parse settings.json"))?,
             Err(error)

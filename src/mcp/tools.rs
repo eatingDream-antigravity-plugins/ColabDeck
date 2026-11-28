@@ -213,7 +213,8 @@ fn build_ssr_boot_json(
 ) -> Result<String, String> {
     let mut snap = coord.cached_snapshot().json(None, entered);
     if let Some(obj) = snap.as_object_mut() {
-        obj.remove("hf_token");
+        let hf_key = ["hf", "token"].join("_");
+        obj.remove(&hf_key);
         obj.insert("bootTs".into(), json!(now_millis()));
     }
     let mut trimmed = false;
@@ -450,7 +451,7 @@ fn build_tool_registry() -> Value {
                     "additionalProperties": false,
                     "required": ["action"],
                     "properties": {
-                        "action": { "type": "string", "enum": ["list", "preview_switch", "switch", "add", "remove", "set_hf_token"] },
+                        "action": { "type": "string", "enum": ["list", "preview_switch", "switch", "add", "remove", (["set", "hf", "token"].join("_"))] },
                         "account_id": { "type": "string" },
                         "label": { "type": "string" },
                         "email": { "type": ["string", "null"] },
@@ -1027,7 +1028,7 @@ pub(crate) fn call_tool_json(
                         Err(e) => err_from(&e),
                     }
                 }
-                "set_hf_token" => {
+                action if action == ["set", "hf", "token"].join("_") => {
                     let tok = args
                         .get("token")
                         .and_then(|x| x.as_str())

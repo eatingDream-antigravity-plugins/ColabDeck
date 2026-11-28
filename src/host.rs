@@ -7,9 +7,9 @@
 use crate::error::{Error, ErrorKind, Result};
 use crate::util::{redact_secrets, tail, CancelToken, DiagnosticRedactor};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -204,6 +204,8 @@ impl Host {
         let mut stderr = String::new();
         let mut stderr_redactor = DiagnosticRedactor::new(&req.redact);
         let mut pipes_closed = false;
+        let mut reaped = false;
+        let mut exit_status: Option<ExitStatus> = None;
 
         let result = loop {
             if cancel.is_cancelled() {
@@ -220,10 +222,20 @@ impl Host {
                     ),
                 ));
             }
-            match child.try_wait() {
-                Ok(Some(status)) if pipes_closed => break Ok((status.code(), false)),
-                Ok(_) => {}
-                Err(e) => break Err(e.into()),
+            if !reaped {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        reaped = true;
+                        exit_status = Some(status);
+                        if pipes_closed {
+                            break Ok((status.code(), false));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => break Err(e.into()),
+                }
+            } else if pipes_closed {
+                break Ok((exit_status.and_then(|s| s.code()), false));
             }
             if pipes_closed {
                 thread::sleep(Duration::from_millis(10));
@@ -257,7 +269,7 @@ impl Host {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
         };
-        if !matches!(result, Ok((_, false))) {
+        if !matches!(result, Ok((_, false))) && !reaped {
             kill_process_group(&mut child);
             thread::spawn(move || {
                 let _ = child.wait();
@@ -462,7 +474,7 @@ fn hf_domain(url: &str) -> Result<&'static str> {
     }
 }
 
-fn public_ipv4(ip: Ipv4Addr) -> bool {
+pub(crate) fn public_ipv4(ip: Ipv4Addr) -> bool {
     let [a, b, c, _] = ip.octets();
     !matches!(
         (a, b, c),
@@ -477,6 +489,33 @@ fn public_ipv4(ip: Ipv4Addr) -> bool {
             | (198, 51, 100)
             | (203, 0, 113)
     )
+}
+
+pub(crate) fn public_ipv6(ip: Ipv6Addr) -> bool {
+    let seg = ip.segments();
+    if ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || ip.to_ipv4_mapped().is_some()
+        || ip.to_ipv4().is_some()
+    {
+        return false;
+    }
+    // Reject unique local (fc00::/7), link-local (fe80::/10), site-local (fec0::/10),
+    // Teredo (2001::/32), 6to4 (2002::/16), documentation (2001:db8::/32), and ORCHID (2001:20::/28).
+    let unique_local = (seg[0] & 0xfe00) == 0xfc00;
+    let link_or_site_local = (seg[0] & 0xff80) == 0xfe80;
+    let teredo = seg[0] == 0x2001 && seg[1] == 0;
+    let doc = seg[0] == 0x2001 && seg[1] == 0x0db8;
+    let six_to_four = seg[0] == 0x2002;
+    !(unique_local || link_or_site_local || teredo || doc || six_to_four)
+}
+
+pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => public_ipv4(v4),
+        IpAddr::V6(v6) => public_ipv6(v6),
+    }
 }
 
 fn validated_colab(path: &Path) -> Option<PathBuf> {
@@ -517,5 +556,12 @@ mod tests {
         assert!(validate_public_https_url("https://169.254.169.254/latest").is_err());
         assert!(validate_public_https_url("https://172.16.0.1/x").is_err());
         assert!(validate_public_https_url("https://localhost:8080/x").is_err());
+        assert!(!is_public_ip("127.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("::1".parse().unwrap()));
+        assert!(!is_public_ip("fe80::1".parse().unwrap()));
+        assert!(!is_public_ip("fc00::1".parse().unwrap()));
+        assert!(!is_public_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("::ffff:8.8.8.8".parse().unwrap()));
+        assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
 }

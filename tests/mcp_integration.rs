@@ -1500,3 +1500,110 @@ fn settings_hot_reload_and_structured_error_payloads_work_end_to_end() {
 
     coord.shutdown();
 }
+
+#[test]
+fn install_script_hardening_and_cli_fail_closed_without_home() {
+    let install_sh = include_str!("../scripts/install.sh");
+    assert!(install_sh.contains("--connect-timeout 2 --max-time 5"));
+    assert!(install_sh.contains("-K -"));
+    assert!(!install_sh.contains("-H \"x-codeium-csrf-token"));
+    assert!(install_sh.contains("^(localhost|127\\.0\\.0\\.1|\\[::1\\]):[0-9]{1,5}$"));
+    assert!(install_sh.contains("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"));
+    assert!(install_sh.contains("^[0-9a-fA-F]{64}$"));
+
+    // Runtime verification against newline-injected VERSION, LS_ADDR, and CSRF_TOKEN.
+    let script_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/install.sh");
+    let bad_ver = std::process::Command::new("sh")
+        .arg(&script_path)
+        .arg("--version")
+        .arg("v1.0.0\nevil")
+        .arg("--no-reload")
+        .output()
+        .unwrap();
+    assert!(!bad_ver.status.success());
+    assert!(String::from_utf8_lossy(&bad_ver.stderr).contains("invalid release version tag"));
+
+    let tmp = PrivateDir::new(&std::env::temp_dir(), "install-sh-test").unwrap();
+    let fake_bin = tmp.path().join("bin");
+    fs::create_dir(&fake_bin).unwrap();
+    let marker = tmp.path().join("curl_called");
+    let fake_curl = fake_bin.join("curl");
+    fs::write(
+        &fake_curl,
+        format!(
+            "#!/bin/sh\necho \"$*\" > \"{}\"\ncat >> \"{}\"\nprintf '200'\n",
+            marker.display(),
+            marker.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_curl, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let helper_end = install_sh.find("\ninstall_from_source()").unwrap();
+    let fn_start = install_sh.find("is_single_line_regex()").unwrap();
+    let harness = tmp.path().join("harness.sh");
+    fs::write(
+        &harness,
+        format!(
+            "#!/bin/sh\nset -eu\nNO_RELOAD=0\nFORCE_RELOAD=0\n{}\nrefresh_mcp_host\n",
+            &install_sh[fn_start..helper_end]
+        ),
+    )
+    .unwrap();
+    let path_env = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    for (ls_addr, tok) in [
+        ("127.0.0.1:5387\nurl = \"https://evil\"", "tok123"),
+        ("127.0.0.1:99999", "tok123"),
+        ("127.0.0.1:0", "tok123"),
+        ("evil.example:5387", "tok123"),
+        ("127.0.0.1:5387", "tok\nurl = \"https://evil\""),
+        ("127.0.0.1:5387", "tok\"evil"),
+    ] {
+        let _ = fs::remove_file(&marker);
+        let out = std::process::Command::new("sh")
+            .arg(&harness)
+            .env("PATH", &path_env)
+            .env("ANTIGRAVITY_LS_ADDRESS", ls_addr)
+            .env("ANTIGRAVITY_CSRF_TOKEN", tok)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert!(
+            !marker.exists(),
+            "curl must not run for injected env: ls={ls_addr:?} tok={tok:?}"
+        );
+    }
+    let ok = std::process::Command::new("sh")
+        .arg(&harness)
+        .env("PATH", &path_env)
+        .env("ANTIGRAVITY_LS_ADDRESS", "[::1]:5387")
+        .env("ANTIGRAVITY_CSRF_TOKEN", "csrf-valid-token")
+        .output()
+        .unwrap();
+    assert!(ok.status.success());
+    let recorded = fs::read_to_string(&marker).unwrap();
+    assert!(recorded.contains("-K -"));
+    assert!(recorded.contains(
+        "http://[::1]:5387/exa.language_server_pb.LanguageServerService/RefreshMcpServers"
+    ));
+    assert!(!recorded.contains("-H"));
+    assert!(recorded.contains("header = \"x-codeium-csrf-token: csrf-valid-token\""));
+
+    let bin = env!("CARGO_BIN_EXE_colab-mcp");
+    let out = std::process::Command::new(bin)
+        .arg("status")
+        .arg("--mock")
+        .env_clear()
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot determine data directory"));
+}

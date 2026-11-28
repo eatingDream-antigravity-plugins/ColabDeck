@@ -84,16 +84,38 @@ if [ "$UNINSTALL" -eq 1 ]; then
   exit 0
 fi
 
+is_single_line_regex() {
+  [ "$(printf '%s' "$1" | LC_ALL=C tr -d '\041-\176' | wc -c)" -eq 0 ] \
+    && printf '%s\n' "$1" | grep -Eq "$2"
+}
+
 refresh_mcp_host() {
   if [ "$NO_RELOAD" -eq 1 ]; then
     return 0
   fi
   if [ -n "${ANTIGRAVITY_CSRF_TOKEN:-}" ]; then
-    code="$(curl -sS -o /dev/null -w '%{http_code}' \
-      -H "Content-Type: application/json" \
-      -H "x-codeium-csrf-token: ${ANTIGRAVITY_CSRF_TOKEN}" \
-      -d '{"serverName": "colab-mcp_colab-mcp"}' \
-      "http://${ANTIGRAVITY_LS_ADDRESS:-localhost:5387}/exa.language_server_pb.LanguageServerService/RefreshMcpServers" 2>/dev/null || true)"
+    LS_ADDR="${ANTIGRAVITY_LS_ADDRESS:-localhost:5387}"
+    if ! is_single_line_regex "$LS_ADDR" '^(localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}$'; then
+      printf 'Could not auto-refresh colab-mcp (non-loopback ANTIGRAVITY_LS_ADDRESS). Restart it in Customizations > Installed > colab-mcp > MCP > Restart.\n'
+      return 0
+    fi
+    _ls_port="${LS_ADDR##*:}"
+    if [ "$_ls_port" -lt 1 ] || [ "$_ls_port" -gt 65535 ]; then
+      printf 'Could not auto-refresh colab-mcp (invalid ANTIGRAVITY_LS_ADDRESS port). Restart it in Customizations > Installed > colab-mcp > MCP > Restart.\n'
+      return 0
+    fi
+    if [ "$(printf '%s' "$ANTIGRAVITY_CSRF_TOKEN" | LC_ALL=C tr -d '\040-\176' | wc -c)" -ne 0 ] \
+      || case "$ANTIGRAVITY_CSRF_TOKEN" in *[\"\\]*) true ;; *) false ;; esac; then
+      printf 'Could not auto-refresh colab-mcp (invalid CSRF token format). Restart it in Customizations > Installed > colab-mcp > MCP > Restart.\n'
+      return 0
+    fi
+    code="$(
+      printf 'header = "Content-Type: application/json"\nheader = "x-codeium-csrf-token: %s"\n' \
+        "$ANTIGRAVITY_CSRF_TOKEN" |
+      curl -sS -g --connect-timeout 2 --max-time 5 -o /dev/null -w '%{http_code}' \
+        -d '{"serverName": "colab-mcp_colab-mcp"}' -K - \
+        "http://${LS_ADDR}/exa.language_server_pb.LanguageServerService/RefreshMcpServers" 2>/dev/null || true
+    )"
     if [ "$code" = "200" ]; then
       printf 'Refreshed colab-mcp in Antigravity (HTTP 200). Close and reopen the Colab Deck panel tab to load updated UI.\n'
     else
@@ -225,6 +247,11 @@ else
   esac
 fi
 
+if ! is_single_line_regex "$VERSION" '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+  printf 'error: invalid release version tag: %s\n' "$VERSION" >&2
+  exit 1
+fi
+
 ARCHIVE="colab-mcp-${VERSION}-${TARGET}.tar.gz"
 BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
 
@@ -238,6 +265,10 @@ curl -fsSL -o "${TMP_DIR}/${ARCHIVE}.sha256" "${BASE_URL}/${ARCHIVE}.sha256"
 EXPECTED_SHA="$(awk '{print $1; exit}' "${TMP_DIR}/${ARCHIVE}.sha256" | tr -d '\r\n')"
 if [ -z "$EXPECTED_SHA" ]; then
   printf 'error: empty SHA-256 checksum file\n' >&2
+  exit 1
+fi
+if ! is_single_line_regex "$EXPECTED_SHA" '^[0-9a-fA-F]{64}$'; then
+  printf 'error: invalid SHA-256 checksum format\n' >&2
   exit 1
 fi
 

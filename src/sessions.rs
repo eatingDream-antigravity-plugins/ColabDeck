@@ -6,7 +6,10 @@
 use crate::cli::ServerSession;
 use crate::error::{Error, ErrorKind, Result};
 use crate::settings::{Accelerator, GuardPolicy};
-use crate::util::{fnv1a_64, lock_file, write_atomic_private, PrivateDir};
+use crate::util::{
+    ensure_private_dir, fnv1a_64, lock_file, read_private_bounded, write_atomic_private,
+    PrivateDir, MAX_STATE_BYTES,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
@@ -474,7 +477,7 @@ impl SessionLedger {
                 format!("cost guard ledger recovery required: cannot read ledger.json ({detail})"),
             )
         };
-        match fs::read(&self.path) {
+        match read_private_bounded(&self.path, MAX_STATE_BYTES) {
             Ok(raw) => serde_json::from_slice(&raw).map_err(|e| recovery(ErrorKind::Parse, &e)),
             Err(e)
                 if e.kind() == io::ErrorKind::NotFound
@@ -533,6 +536,10 @@ impl SessionLedger {
 
     pub(crate) fn lock_endpoint(&self, endpoint: &str) -> Result<File> {
         let key = fnv1a_64(endpoint.as_bytes());
+        if let Some(parent) = self.path.parent() {
+            ensure_private_dir(parent)?;
+            ensure_private_dir(&parent.join("endpoints"))?;
+        }
         lock_file(
             &self
                 .path
@@ -571,11 +578,13 @@ impl SessionLedger {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                     Err(e) => return Err(e.into()),
                 },
-                Err(TryLockError::WouldBlock) => match fs::read(dir.path().join("claim.json")) {
-                    Ok(raw) => claims.push(serde_json::from_slice(&raw)?),
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e.into()),
-                },
+                Err(TryLockError::WouldBlock) => {
+                    match read_private_bounded(&dir.path().join("claim.json"), MAX_STATE_BYTES) {
+                        Ok(raw) => claims.push(serde_json::from_slice(&raw)?),
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                }
                 Err(TryLockError::Error(e)) => return Err(e.into()),
             }
         }
@@ -584,7 +593,12 @@ impl SessionLedger {
 
     /// The caller holds the ledger lock from the quota check through lease creation.
     pub(crate) fn claim(&self, claim: &SessionClaim) -> Result<SessionLease> {
-        let directory = PrivateDir::new(&self.path.with_file_name("reservations"), "provision")?;
+        if let Some(parent) = self.path.parent() {
+            ensure_private_dir(parent)?;
+        }
+        let reservations = self.path.with_file_name("reservations");
+        ensure_private_dir(&reservations)?;
+        let directory = PrivateDir::new(&reservations, "provision")?;
         let lock = lock_file(&directory.path().join("claim.lock"))?;
         write_atomic_private(
             &directory.path().join("claim.json"),

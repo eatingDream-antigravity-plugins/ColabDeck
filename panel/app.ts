@@ -564,7 +564,7 @@ const dv = (() => {
         const live = (eps || []).filter((e): e is Required<Pick<PluginEndpoint, "local_url">> & PluginEndpoint => Boolean(e.local_url)); H(r[7], !live.length);
         sync(r[7], live, (e) => `${e.local_url}${e.path || ""}`, () => { const a = SP("mn el"), b = BS("c", "ol"), c = BS("", "cp"), d = BS("", "cp"); return [IT(RW(a, RL(b, c, d))), a, b, c, d] as const; }, (er, { local_url: lu, path: pt = "", kind }) => {
           const f = `${lu}${pt === "/" ? "" : pt}`, cUrl = kind === "openai" && pt === "/v1" ? `${lu}/v1/models` : f;
-          T(er[1], f); D(er[2], "url", lu); L(er[2], "ou"); D(er[3], "v", f); L(er[3], "cu"); D(er[4], "v", `curl -sS ${cUrl}`); L(er[4], "cr");
+          T(er[1], f); D(er[2], "url", lu); L(er[2], "ou"); D(er[3], "v", f); L(er[3], "cu"); D(er[4], "v", `curl -sS '${cUrl.replace(/'/g, "'\\''")}'`); L(er[4], "cr");
         });
         const logs = (lgs || []).join("\n"); H(r[8], !logs); T(r[8], logs);
       });

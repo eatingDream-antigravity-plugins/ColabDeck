@@ -6,15 +6,21 @@
 use crate::cli::{ColabBackend, RESERVED_VM_PORT, RESULT_MARKER};
 use crate::error::{Error, ErrorKind, Result};
 use crate::hf::is_valid_repo_id;
-use crate::host::{ExecRequest, Host, LineAction};
+use crate::host::{is_public_ip, public_ipv4, public_ipv6, ExecRequest, Host, LineAction};
 use crate::settings::{Accelerator, AuthMode};
-use crate::util::{b64_encode, is_env_key, redact_json, redact_secrets, CancelToken};
+use crate::util::{
+    b64_encode, ensure_private_dir, is_env_key, read_private_bounded_string, redact_json,
+    redact_secrets, write_atomic_private, CancelToken, PrivateDir,
+};
 use crate::watchdog::{HEARTBEAT_PATH, VM_BASE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::net::{Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 pub const API_VERSION: u32 = 1;
@@ -294,6 +300,12 @@ impl PluginManifest {
                     "endpoint cannot use port 8080",
                 ));
             }
+            if !valid_endpoint_path(&ep.path) {
+                return Err(Error::invalid(
+                    "endpoints.path",
+                    "endpoint path must start with '/', be <= 256 bytes, and contain only URL-safe ASCII characters",
+                ));
+            }
         }
         Ok(())
     }
@@ -463,9 +475,33 @@ fn valid_api_key(key: &str) -> bool {
     !key.starts_with('#') && !key.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-fn valid_git_remote(url: &str) -> bool {
+fn valid_endpoint_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path.len() <= 256
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'~' | b'-'))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitRemoteTarget {
+    is_ssh: bool,
+    host: String,
+    port: u16,
+}
+
+const GIT_SSH_ISOLATED_CMD: &str =
+    "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes";
+
+fn parse_git_remote(url: &str) -> Result<GitRemoteTarget> {
+    let bad = || {
+        Error::invalid(
+            "url",
+            "expected a credential-free public HTTPS (port 443) or valid public SSH Git remote",
+        )
+    };
     if url.len() > 2048 || !url.bytes().all(|b| b.is_ascii_graphic()) {
-        return false;
+        return Err(bad());
     }
     let valid_segment = |segment: &str| {
         !matches!(segment, "." | "..")
@@ -477,65 +513,211 @@ fn valid_git_remote(url: &str) -> bool {
     };
     if let Some((scheme, rest)) = url.split_once("://") {
         if !matches!(scheme, "https" | "ssh") {
-            return false;
+            return Err(bad());
         }
-        let Some((authority, path)) = rest.split_once('/') else {
-            return false;
-        };
-        let host = if let Some((user, host)) = authority.split_once('@') {
-            if scheme != "ssh" || !valid_segment(user) {
-                return false;
+        let is_ssh = scheme == "ssh";
+        let (authority, path) = rest.split_once('/').ok_or_else(bad)?;
+        let host_auth = if let Some((user, host)) = authority.split_once('@') {
+            if !is_ssh || !valid_segment(user) {
+                return Err(bad());
             }
             host
         } else {
             authority
         };
-        return valid_git_host(host, true) && path.split('/').all(valid_segment);
+        if !path.split('/').all(valid_segment) {
+            return Err(bad());
+        }
+        let (host, port) = parse_git_host(host_auth, is_ssh, true).ok_or_else(bad)?;
+        return Ok(GitRemoteTarget { is_ssh, host, port });
     }
-    let Some((host, path)) = url
+    let (host_auth, path) = url
         .strip_prefix("git@")
         .and_then(|rest| rest.split_once(':'))
-    else {
-        return false;
-    };
-    valid_git_host(host, false)
-        && path
-            .split_once('/')
-            .is_some_and(|(owner, repo)| valid_segment(owner) && valid_segment(repo))
+        .ok_or_else(bad)?;
+    if !path
+        .split_once('/')
+        .is_some_and(|(owner, repo)| valid_segment(owner) && valid_segment(repo))
+    {
+        return Err(bad());
+    }
+    let (host, port) = parse_git_host(host_auth, true, false).ok_or_else(bad)?;
+    Ok(GitRemoteTarget {
+        is_ssh: true,
+        host,
+        port,
+    })
 }
 
-fn valid_git_host(authority: &str, allow_port: bool) -> bool {
-    let valid_port = |port: &str| {
-        allow_port
-            && port.bytes().all(|b| b.is_ascii_digit())
-            && port.parse::<u16>().is_ok_and(|port| port != 0)
+fn parse_git_host(authority: &str, is_ssh: bool, allow_port: bool) -> Option<(String, u16)> {
+    let default_port = if is_ssh { 22 } else { 443 };
+    let parse_port = |port: &str| -> Option<u16> {
+        if !allow_port || !port.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let p = port.parse::<u16>().ok()?;
+        if p == 0 || (!is_ssh && p != 443) {
+            return None;
+        }
+        Some(p)
     };
-    if let Some((ip, suffix)) = authority
+    if let Some((ip_str, suffix)) = authority
         .strip_prefix('[')
         .and_then(|host| host.split_once(']'))
     {
-        return ip.parse::<std::net::Ipv6Addr>().is_ok()
-            && (suffix.is_empty() || suffix.strip_prefix(':').is_some_and(valid_port));
+        let ip = ip_str.parse::<Ipv6Addr>().ok()?;
+        if !public_ipv6(ip) {
+            return None;
+        }
+        let port = if suffix.is_empty() {
+            default_port
+        } else {
+            suffix.strip_prefix(':').and_then(parse_port)?
+        };
+        return Some((ip.to_string(), port));
     }
-    let (host, port) = authority
+    let (host, port_str) = authority
         .split_once(':')
         .map_or((authority, None), |(host, port)| (host, Some(port)));
-    port.is_none_or(valid_port)
-        && host.len() <= 253
-        && host.split('.').all(|label| {
-            label.len() <= 63
-                && label
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-                && label
-                    .as_bytes()
-                    .last()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-                && label
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        })
+    let port = match port_str {
+        Some(p) => parse_port(p)?,
+        None => default_port,
+    };
+    if let Ok(ip) = host.parse::<Ipv4Addr>() {
+        return public_ipv4(ip).then(|| (ip.to_string(), port));
+    }
+    if host.is_empty() || host.len() > 253 || !host.contains('.') {
+        return None;
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    if !labels.iter().all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    }) {
+        return None;
+    }
+    // Reject all-numeric TLDs (blocks octal/decimal/hex IPv4 aliases like 0177.0.0.1).
+    let tld = labels.last()?;
+    if !tld.bytes().any(|b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    let lower = host.to_ascii_lowercase();
+    if lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower.ends_with(".local")
+        || lower.ends_with(".internal")
+        || lower.ends_with(".arpa")
+    {
+        return None;
+    }
+    Some((host.to_owned(), port))
+}
+
+fn verify_public_remote_dns(host: &str, port: u16) -> Result<()> {
+    if let Ok(ip) = host.parse::<Ipv4Addr>() {
+        return public_ipv4(ip)
+            .then_some(())
+            .ok_or_else(|| Error::invalid("url", "git remote resolves to a non-public IP"));
+    }
+    if let Ok(ip) = host.parse::<Ipv6Addr>() {
+        return public_ipv6(ip)
+            .then_some(())
+            .ok_or_else(|| Error::invalid("url", "git remote resolves to a non-public IP"));
+    }
+    let host_owned = host.to_owned();
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let resolved = (host_owned.as_str(), port)
+            .to_socket_addrs()
+            .map(|addrs| addrs.collect::<Vec<_>>());
+        let _ = tx.send(resolved);
+    });
+    let addrs = rx
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| Error::new(ErrorKind::Http, "git remote DNS resolution timed out"))?
+        .map_err(|e| Error::new(ErrorKind::Http, format!("git remote DNS failed: {e}")))?;
+    if addrs.is_empty() || addrs.iter().any(|addr| !is_public_ip(addr.ip())) {
+        return Err(Error::invalid(
+            "url",
+            "git remote resolves to a non-public or empty address",
+        ));
+    }
+    Ok(())
+}
+
+fn git_isolated_env(target: Option<&GitRemoteTarget>) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+        ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+    ];
+    if let Some(t) = target {
+        env.push((
+            "GIT_ALLOW_PROTOCOL".into(),
+            if t.is_ssh { "ssh" } else { "https" }.into(),
+        ));
+        if t.is_ssh {
+            env.push(("GIT_SSH_COMMAND".into(), GIT_SSH_ISOLATED_CMD.into()));
+        }
+    }
+    env
+}
+
+fn build_git_clone_request(url: &str, target: &GitRemoteTarget, dest: &Path) -> ExecRequest {
+    let mut req = ExecRequest::new(
+        "git",
+        vec![
+            "-c".into(),
+            "protocol.allow=never".into(),
+            "-c".into(),
+            "protocol.file.allow=never".into(),
+            "-c".into(),
+            format!(
+                "protocol.https.allow={}",
+                if target.is_ssh { "never" } else { "always" }
+            ),
+            "-c".into(),
+            format!(
+                "protocol.ssh.allow={}",
+                if target.is_ssh { "always" } else { "never" }
+            ),
+            "-c".into(),
+            "core.symlinks=false".into(),
+            "-c".into(),
+            "core.fsmonitor=false".into(),
+            "-c".into(),
+            "core.hooksPath=/dev/null".into(),
+            "-c".into(),
+            "filter.lfs.smudge=".into(),
+            "-c".into(),
+            "filter.lfs.process=".into(),
+            "-c".into(),
+            "filter.lfs.required=false".into(),
+            "-c".into(),
+            "http.followRedirects=false".into(),
+            "clone".into(),
+            "--depth".into(),
+            "1".into(),
+            "--no-checkout".into(),
+            "--".into(),
+            url.to_owned(),
+            dest.to_string_lossy().into_owned(),
+        ],
+    );
+    req.env = git_isolated_env(Some(target));
+    req.timeout = Some(Duration::from_secs(45));
+    req
 }
 
 pub fn validate_plugin_id(id: &str) -> Result<()> {
@@ -603,21 +785,24 @@ impl PluginStore {
                 "bundled plugin 'llama-cpp' cannot be overwritten",
             ));
         }
-        fs::create_dir_all(&self.plugins_dir)?;
+        if let Some(data_dir) = self.plugins_dir.parent() {
+            ensure_private_dir(data_dir)?;
+        }
+        ensure_private_dir(&self.plugins_dir)?;
         let root = self.canonical_root()?;
-        let staging = crate::util::PrivateDir::new(&root, "install")?;
+        let staging = PrivateDir::new(&root, "install")?;
         let manifest = toml::to_string(&plugin.manifest).map_err(|_| {
             Error::invalid("manifest", "cannot serialize validated plugin manifest")
         })?;
-        fs::write(staging.path().join("plugin.toml"), manifest)?;
-        fs::write(
-            staging.path().join(&plugin.manifest.run.script),
-            &plugin.script_content,
+        write_atomic_private(&staging.path().join("plugin.toml"), manifest.as_bytes())?;
+        write_atomic_private(
+            &staging.path().join(&plugin.manifest.run.script),
+            plugin.script_content.as_bytes(),
         )?;
         let dest = root.join(&plugin.manifest.id);
         match dest.symlink_metadata() {
             Ok(meta) if meta.file_type().is_dir() => {
-                let backup = crate::util::PrivateDir::new(&root, "backup")?;
+                let backup = PrivateDir::new(&root, "backup")?;
                 let old = backup.path().join("previous");
                 fs::rename(&dest, &old)?;
                 if let Err(error) = fs::rename(staging.path(), &dest) {
@@ -637,41 +822,14 @@ impl PluginStore {
         Ok(plugin)
     }
 
-    /// Install from an HTTPS or SSH Git remote.
+    /// Install from a public HTTPS (port 443) or isolated SSH Git remote without working-tree checkout.
     pub fn install_from_git(&self, host: &Host, url: &str) -> Result<InstalledPlugin> {
-        if !valid_git_remote(url) {
-            return Err(Error::invalid(
-                "url",
-                "expected a credential-free HTTPS URL or a valid SSH Git remote",
-            ));
-        }
+        let target = parse_git_remote(url)?;
         host.require_external_io()?;
-        let staging = crate::util::PrivateDir::new(&std::env::temp_dir(), "git")?;
-        let tmp = staging.path().join("checkout");
-        let mut req = ExecRequest::new(
-            "git",
-            vec![
-                "-c".into(),
-                "protocol.allow=never".into(),
-                "-c".into(),
-                "protocol.https.allow=always".into(),
-                "-c".into(),
-                "protocol.ssh.allow=always".into(),
-                "-c".into(),
-                "core.symlinks=false".into(),
-                "clone".into(),
-                "--depth".into(),
-                "1".into(),
-                "--".into(),
-                url.to_owned(),
-                tmp.to_string_lossy().into_owned(),
-            ],
-        );
-        req.env = vec![
-            ("GIT_ALLOW_PROTOCOL".into(), "https:ssh".into()),
-            ("GIT_TERMINAL_PROMPT".into(), "0".into()),
-        ];
-        req.timeout = Some(Duration::from_secs(45));
+        verify_public_remote_dns(&target.host, target.port)?;
+        let staging = PrivateDir::new(&std::env::temp_dir(), "git")?;
+        let repo_dir = staging.path().join("repo");
+        let req = build_git_clone_request(url, &target, &repo_dir);
         let out = host.run(req, &CancelToken::new(), &mut |_| LineAction::Continue)?;
         if out.code != Some(0) {
             return Err(Error::new(
@@ -679,7 +837,9 @@ impl PluginStore {
                 format!("git clone failed: {}", out.stderr.trim()),
             ));
         }
-        self.install_from_dir(&tmp)
+        let extracted = PrivateDir::new(&std::env::temp_dir(), "git")?;
+        extract_git_plugin_from_repo(host, &repo_dir, extracted.path())?;
+        self.install_from_dir(extracted.path())
     }
 
     fn canonical_root(&self) -> Result<PathBuf> {
@@ -733,6 +893,85 @@ impl PluginStore {
     }
 }
 
+fn read_git_blob(host: &Host, repo_dir: &Path, path: &str, max_bytes: u64) -> Result<String> {
+    let git_exec = |mut sub_args: Vec<String>| -> Result<String> {
+        let mut args = vec![
+            "-C".into(),
+            repo_dir.to_string_lossy().into_owned(),
+            "-c".into(),
+            "core.fsmonitor=false".into(),
+            "-c".into(),
+            "core.hooksPath=/dev/null".into(),
+        ];
+        args.append(&mut sub_args);
+        let mut req = ExecRequest::new("git", args);
+        req.env = git_isolated_env(None);
+        req.timeout = Some(Duration::from_secs(10));
+        let out = host.run(req, &CancelToken::new(), &mut |_| LineAction::Continue)?;
+        if out.code != Some(0) {
+            return Err(Error::invalid(
+                path,
+                format!("git object read failed for {path}: {}", out.stderr.trim()),
+            ));
+        }
+        Ok(out.stdout)
+    };
+    let listing = git_exec(vec![
+        "ls-tree".into(),
+        "-l".into(),
+        "HEAD".into(),
+        "--".into(),
+        path.to_owned(),
+    ])?;
+    let line = listing
+        .lines()
+        .next()
+        .ok_or_else(|| Error::invalid(path, format!("missing {path} in repository HEAD")))?;
+    let (meta, name) = line
+        .split_once('\t')
+        .ok_or_else(|| Error::invalid(path, "malformed git tree entry"))?;
+    if name != path {
+        return Err(Error::invalid(path, "unexpected git tree path"));
+    }
+    let parts: Vec<&str> = meta.split_whitespace().collect();
+    if parts.len() != 4 {
+        return Err(Error::invalid(path, "malformed git tree metadata"));
+    }
+    let (mode, kind, oid, size_str) = (parts[0], parts[1], parts[2], parts[3]);
+    if !matches!(mode, "100644" | "100755") || kind != "blob" {
+        return Err(Error::invalid(
+            path,
+            "symlinks and non-regular git objects are rejected",
+        ));
+    }
+    let size = size_str
+        .parse::<u64>()
+        .map_err(|_| Error::invalid(path, "invalid git blob size"))?;
+    if size > max_bytes {
+        return Err(Error::invalid(
+            path,
+            format!("{path} exceeds {max_bytes} bytes"),
+        ));
+    }
+    let content = git_exec(vec!["cat-file".into(), "blob".into(), oid.to_owned()])?;
+    if content.len() as u64 > max_bytes {
+        return Err(Error::invalid(
+            path,
+            format!("{path} exceeds {max_bytes} bytes"),
+        ));
+    }
+    Ok(content)
+}
+
+fn extract_git_plugin_from_repo(host: &Host, repo_dir: &Path, dest: &Path) -> Result<()> {
+    let raw_manifest = read_git_blob(host, repo_dir, "plugin.toml", MAX_MANIFEST_BYTES)?;
+    let manifest = PluginManifest::parse_and_validate(&raw_manifest)?;
+    let script_content = read_git_blob(host, repo_dir, &manifest.run.script, MAX_SCRIPT_BYTES)?;
+    write_atomic_private(&dest.join("plugin.toml"), raw_manifest.as_bytes())?;
+    write_atomic_private(&dest.join(&manifest.run.script), script_content.as_bytes())?;
+    Ok(())
+}
+
 fn load_plugin_from_dir(dir: &Path) -> Result<InstalledPlugin> {
     if !dir.symlink_metadata()?.file_type().is_dir() {
         return Err(Error::invalid(
@@ -741,21 +980,12 @@ fn load_plugin_from_dir(dir: &Path) -> Result<InstalledPlugin> {
         ));
     }
     let manifest_path = dir.join("plugin.toml");
-    let meta = fs::symlink_metadata(&manifest_path)?;
-    if !meta.is_file() || meta.len() > MAX_MANIFEST_BYTES {
-        return Err(Error::invalid("plugin.toml", "symlinks are rejected"));
-    }
-    let raw = fs::read_to_string(&manifest_path)?;
+    let raw = read_private_bounded_string(&manifest_path, MAX_MANIFEST_BYTES)
+        .map_err(|e| Error::invalid("plugin.toml", format!("cannot read plugin.toml: {e}")))?;
     let manifest = PluginManifest::parse_and_validate(&raw)?;
     let script_path = dir.join(&manifest.run.script);
-    let smeta = fs::symlink_metadata(&script_path)?;
-    if !smeta.is_file() {
-        return Err(Error::invalid("run.script", "symlinks are rejected"));
-    }
-    if smeta.len() > MAX_SCRIPT_BYTES {
-        return Err(Error::invalid("run.script", "script exceeds 512 KiB"));
-    }
-    let script_content = fs::read_to_string(&script_path)?;
+    let script_content = read_private_bounded_string(&script_path, MAX_SCRIPT_BYTES)
+        .map_err(|e| Error::invalid("run.script", format!("cannot read script: {e}")))?;
     Ok(InstalledPlugin {
         manifest,
         bundled: false,
@@ -1239,12 +1469,38 @@ mod tests {
             "git@host:owner/repo\n",
             "-git@host:owner/repo",
             "ssh://host//owner/repo",
+            // SSRF / private / non-443 HTTPS / IPv4-mapped IPv6 rejections:
+            "https://127.0.0.1/owner/repo.git",
+            "https://10.0.0.1/owner/repo.git",
+            "https://172.16.0.1/owner/repo.git",
+            "https://192.168.1.1/owner/repo.git",
+            "https://169.254.169.254/latest/meta-data",
+            "https://100.64.0.1/owner/repo.git",
+            "https://224.0.0.1/owner/repo.git",
+            "https://0.0.0.0/owner/repo.git",
+            "https://[::1]/owner/repo.git",
+            "https://[::]/owner/repo.git",
+            "https://[fe80::1]/owner/repo.git",
+            "https://[fc00::1]/owner/repo.git",
+            "https://[ff02::1]/owner/repo.git",
+            "https://[::ffff:127.0.0.1]/owner/repo.git",
+            "https://[::ffff:8.8.8.8]/owner/repo.git",
+            "https://localhost/owner/repo.git",
+            "https://sub.localhost/owner/repo.git",
+            "https://internal.local/owner/repo.git",
+            "https://0177.0.0.1/owner/repo.git",
+            "https://2130706433/owner/repo.git",
+            "https://forge.example:8443/owner/repo.git",
+            "ssh://git@127.0.0.1/owner/repo.git",
+            "git@127.0.0.1:owner/repo.git",
+            "git@localhost:owner/repo.git",
         ] {
             let error = store.install_from_git(&host, remote).unwrap_err();
             assert_eq!(error.kind, ErrorKind::InvalidInput, "{remote}");
         }
         for remote in [
             "https://forge.example/owner/repo.git",
+            "https://forge.example:443/owner/repo.git",
             "ssh://git@forge.example:2222/owner/repo.git",
             "git@forge.example:owner/repo",
         ] {
@@ -1254,6 +1510,54 @@ mod tests {
                 .message
                 .contains("execution is disabled"));
         }
+
+        // Verify git clone isolation flags, filters, and SSH hardening.
+        let https_target = parse_git_remote("https://forge.example/owner/repo.git").unwrap();
+        let https_req = build_git_clone_request(
+            "https://forge.example/owner/repo.git",
+            &https_target,
+            Path::new("/tmp/out"),
+        );
+        for flag in [
+            "protocol.allow=never",
+            "protocol.file.allow=never",
+            "protocol.https.allow=always",
+            "protocol.ssh.allow=never",
+            "core.symlinks=false",
+            "core.fsmonitor=false",
+            "core.hooksPath=/dev/null",
+            "filter.lfs.smudge=",
+            "filter.lfs.process=",
+            "filter.lfs.required=false",
+            "http.followRedirects=false",
+            "--no-checkout",
+        ] {
+            assert!(https_req.args.iter().any(|a| a == flag), "missing {flag}");
+        }
+        assert!(https_req
+            .env
+            .contains(&("GIT_CONFIG_NOSYSTEM".into(), "1".into())));
+        assert!(https_req
+            .env
+            .contains(&("GIT_CONFIG_GLOBAL".into(), "/dev/null".into())));
+        assert!(https_req
+            .env
+            .contains(&("GIT_ALLOW_PROTOCOL".into(), "https".into())));
+
+        let ssh_target = parse_git_remote("git@forge.example:owner/repo").unwrap();
+        let ssh_req = build_git_clone_request(
+            "git@forge.example:owner/repo",
+            &ssh_target,
+            Path::new("/tmp/out"),
+        );
+        assert!(ssh_req
+            .env
+            .contains(&("GIT_SSH_COMMAND".into(), GIT_SSH_ISOLATED_CMD.into())));
+        assert!(ssh_req
+            .env
+            .contains(&("GIT_ALLOW_PROTOCOL".into(), "ssh".into())));
+        assert!(verify_public_remote_dns("localhost", 443).is_err());
+        assert!(verify_public_remote_dns("127.0.0.1", 443).is_err());
     }
 
     #[test]
@@ -1322,5 +1626,77 @@ default = "leaked"
 script = "run.py"
 "#;
         assert!(PluginManifest::parse_and_validate(bad_secret).is_err());
+    }
+
+    #[test]
+    fn manifest_validates_endpoint_paths_and_load_rejects_symlinks() {
+        let with_path = |path: &str| {
+            format!(
+                r#"
+api = 1
+id = "ep-plugin"
+version = "0.1.0"
+[name]
+en = "Endpoint"
+[run]
+script = "run.py"
+[[endpoints]]
+id = "api"
+port = 8000
+path = {path:?}
+"#
+            )
+        };
+        for ok_path in ["/", "/v1", "/api/v1/chat_completions-1.0~a"] {
+            assert!(
+                PluginManifest::parse_and_validate(&with_path(ok_path)).is_ok(),
+                "{ok_path}"
+            );
+        }
+        let too_long = format!("/{}", "a".repeat(256));
+        for bad_path in [
+            "",
+            "v1",
+            "/v1;whoami",
+            "/v1|id",
+            "/v1&id",
+            "/v1$(id)",
+            "/v1`id`",
+            "/v1'test",
+            "/v1\"test",
+            "/v1\\test",
+            "/v1 test",
+            "/v1\nid",
+            &too_long,
+        ] {
+            assert!(
+                PluginManifest::parse_and_validate(&with_path(bad_path)).is_err(),
+                "{bad_path}"
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            let temp = PrivateDir::new(&std::env::temp_dir(), "plg-symlink").unwrap();
+            let target = temp.path().join("outside.py");
+            fs::write(&target, "print('hi')\n").unwrap();
+            let src = temp.path().join("src");
+            fs::create_dir(&src).unwrap();
+            fs::write(
+                src.join("plugin.toml"),
+                r#"
+api = 1
+id = "sym-plugin"
+version = "0.1.0"
+[name]
+en = "Sym"
+[run]
+script = "run.py"
+"#,
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(&target, src.join("run.py")).unwrap();
+            assert!(load_plugin_from_dir(&src).is_err());
+        }
     }
 }
